@@ -3,12 +3,8 @@
 
 #include <vector>
 #include <complex>
-
-// If needed, you can include the definition of M_PI here or ensure it's defined elsewhere in your project
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif 
-
+#include <cmath>
+// Input signal 
 typedef std::vector<double> Signal;
 typedef std::vector<std::vector<double>> AFMatrix;  // Ensure it's double, not complex
 
