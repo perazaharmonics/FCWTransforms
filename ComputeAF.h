@@ -23,9 +23,9 @@ public:
     // Define a function to compute the ambiguity surface
     void compute(vector<Complex>& s, vector<double>& t, vector<double>& tau_range, vector<double>& fd_range, vector<vector<Complex>>& ambiguity_surface) {
         // Get the number of tau values, fd values, and time values
-        int num_tau = tau_range.size();
-        int num_fd = fd_range.size();
-        int num_t = t.size();
+        int num_tau = tau_range.size(); // observed Propagation Delays
+        int num_fd = fd_range.size(); // observed Doppler shifts  
+        int num_t = t.size();         // number of Time measurements
 
         // Create vectors to hold the doppler signal and shifted signal
         vector<Complex> doppler_signal(num_t);
