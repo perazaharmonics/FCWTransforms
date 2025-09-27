@@ -7,10 +7,6 @@
 // Use the standard namespace
 using namespace std;
 
-// Define M_PI if it is not already defined
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
 
 // Define a complex number type
 typedef complex<double> Complex;
