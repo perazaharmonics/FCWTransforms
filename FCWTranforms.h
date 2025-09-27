@@ -1517,10 +1517,8 @@ inline void  BitReversal(vector<std::complex<T>> &s, const int nBits)
 // FFTStride method with the conjugate of the input signal.
 // ========================================================================== //
 // FFTStrideEig computes the FFT of a signal and returns the spectrum and the
-// eigenvectors of the FFT matrix. This is useful for computing the eigenvalues
-// and eigenvectors of the FFT matrix, which can be used for spectral analysis
+// eigenvectors of the FFT matrix which can be used for spectral analysis
 // to obtain phase information.
-
 inline std::pair<vector<complex<T>>,vector<vector<complex<T>>>> FFTStrideEig(const vector<complex<T>> &s)
 {
   if (s.empty())                        // Is the input signal empty?
