@@ -837,7 +837,6 @@ class DCT
 // ============================================================================
 // MDCT Beat Granulator (free function)
 // Depends on: Window<T>, DCT<T>::MDCT/IMDCT and a SpectralOps<T>& engine.
-// Place: AFTER DCT<T> and BEFORE SpectralOps<T>.
 // ============================================================================
 // ===================== MDCT Beat Granulator (with Pitch & Stutter) =====================
 template<typename T=float>
@@ -1477,7 +1476,7 @@ inline void  BitReversal(vector<std::complex<T>> &s, const int nBits)
     // AR_PSD: Given autocorrelation r[0..p], compute the “all-pole” PSD estimate
     //    at fftsize uniformly spaced frequencies [0, 2p).  We solve AR(p) via
     //    Levinson-Durbin, then evaluate
-    //      H(?) = s² / |1 + a[1] e^{-j?} + … + a[p] e^{-j p ?} |²
+    //      H(w) = s² / |1 + a[1] e^{-jw} + … + a[p] e^{-j p w} |²
     //    at Nfft points, returning a vector<complex<T>> of length Nfft
     //    (you can take real(H) or abs(H)² as your PSD). 
     // ------------------------------------------------------------------------
@@ -1497,12 +1496,12 @@ inline void  BitReversal(vector<std::complex<T>> &s, const int nBits)
         const T normFactor = T{2} * M_PI / static_cast<T>(fftsize);
         for (int k = 0; k < fftsize; ++k) {
             T omega = normFactor * static_cast<T>(k); 
-            // Evaluate denominator D(?) = 1 + ?_{m=1..p} a[m-1] e^{-j m ?}
+            // Evaluate denominator D(w) = 1 + w_{m=1..p} a[m-1] e^{-j m w}
             std::complex<T> denom = T{1};
             for (int m = 1; m <= order; ++m) {
                 denom += a[m-1] * std::exp(std::complex<T>(T{0}, -omega * static_cast<T>(m)));
             }
-            // PSD(?_k) = s² / |D(?)|²
+            // PSD(w_k) = s² / |D(w)|²
             std::complex<T> H = std::complex<T>(sigma2) / (denom * std::conj(denom));
             psd[k] = H;
         }
@@ -2107,7 +2106,7 @@ inline vector<complex<T>> ZoomIFFT(
   return y;
 }
 // ---------- FFTAutoSelect: policy router over Stockham/Rader/Good-Thomas/Bluestein ---------- //
-// Very chatty policy: chooses a numerically sensible, cache-friendly path based on N.
+// Chooses a numerically sensible, cache-friendly path based on N.
 // 1) Power-of-two ? Stockham auto-sort (no bit reversal, great locality).
 // 2) Prime ? Rader (length-(N-1) cyclic convolution via our FFTStride).
 // 3) Composite with co-prime split ? Good-Thomas (zero twiddles in the middle).
@@ -2282,8 +2281,8 @@ inline vector<complex<T>> Convolution( // Obtain the product of two signals.
     // -------------------------------- //
     // Apply the FFT on the Zero-Padded signal.
     // -------------------------------- //
-    vector<complex<T>> S = FFT(sPad);   // The FFT of the input signal.
-    vector<complex<T>> H = FFT(hPad);   // The FFT of the filter.
+    vector<complex<T>> S = FFTStride(sPad);   // The FFT of the input signal.
+    vector<complex<T>> H = FFTStride(hPad);   // The FFT of the filter.
     // -------------------------------- //
     // Now the filtered signal is just the product of their spectrum.
     // -------------------------------- //
@@ -2294,7 +2293,7 @@ inline vector<complex<T>> Convolution( // Obtain the product of two signals.
     // Obtain the time-domain resulting signal using the IFFT.
     // -------------------------------- //
     vector<complex<T>> y(N);            // Place to store resulting signal.
-    y = IFFT(Y);                        // Get the resulting signal.
+    y = IFFTStride(Y);                        // Get the resulting signal.
     y.resize(n + m - 1);                // Truncate to the original size.
     return y;                           // Return the filtered signal.
 }                                       // ---------- Convolution ----------- //
@@ -2338,7 +2337,7 @@ inline vector<vector<complex<T>>> STFT(const vector<complex<T>> &s,
     // -------------------------------- //
     // Compute the FFT of the windowed seg and store it in the STFT matrix
     // -------------------------------- //
-      sMat[i] = FFT(seg);               // Compute the FFT of the windowed segment.
+      sMat[i] = FFTStride(seg);               // Compute the FFT of the windowed segment.
   }                                     // Done with all segments.            
   return sMat;                          // The windowed spectrum.
 }
@@ -2370,7 +2369,7 @@ inline vector<complex<T>> ISTFT(
     // Compute the IFFT of the current segment, and get the time-domain short
     // signal. This allows us to reconstruct it back using its segments. 
     // -------------------------------- //
-      vector<complex<T>> seg = IFFT(sMat[i]);
+      vector<complex<T>> seg = IFFTStride(sMat[i]);
     // -------------------------------- //
     // Overlap-add the IFFT result to the output signal. Because the segments
     // were windowed, we overlap-add each segment to obtain total signal's energy
@@ -2557,7 +2556,7 @@ inline vector<complex<T>> OLAProcessor(
     const float ovlap)           // The percentage of overlap
 {
     vector<vector<complex<T>>> sMat = STFT(s, w, wSiz, ovlap); // STFT of input signal.
-    vector<complex<T>> H = FFT(h);      // FFT of the FIR filter.
+    vector<complex<T>> H = FFTStride(h);      // FFT of the FIR filter.
     const int frames = sMat.size();     // Number of frames in the STFT matrix.
     vector<vector<complex<T>>> sig(frames, vector<complex<T>>(wSiz));
     // -------------------------------- //
@@ -2581,7 +2580,7 @@ inline vector<complex<T>> OLAProcessor(
 {
     vector<vector<complex<T>>> sMat = STFT(s, w, wSiz, ovlap);// STFT of input signal.
     vector<complex<T>> H(wSiz,complex<T>(0.0,0.0));// Dummy Impulse filter.
-    H=FFT(H);                           // FFT of the FIR filter.
+    H=FFTStride(H);                           // FFT of the FIR filter.
     const int frames = sMat.size();     // Number of frames in the STFT matrix.
     vector<vector<complex<T>>> sig(frames, vector<complex<T>>(wSiz));
     // -------------------------------- //
@@ -2704,7 +2703,7 @@ inline vector<vector<complex<T>>> Sweep(
     // Perform an FFT on the windowed signal to analyze the energy 
     // of the signal at this frequency offset.
     // -------------------------------- //
-    vector<complex<T>> spectrum=FFT(S);
+    vector<complex<T>> spectrum=FFTStride(S);
     // -------------------------------- //
     // Normalize the FFT result by a suitable factor (maybe wSiz?) This should
     // distribute the energy across the window.
