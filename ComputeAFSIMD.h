@@ -7,7 +7,9 @@
 // Input signal 
 typedef std::vector<double> Signal;
 typedef std::vector<std::vector<double>> AFMatrix;  // Ensure it's double, not complex
-
+// X: Input signal
+// tau_values: observed propagation delays
+// f_values: Chirpy Carrier onserved Doppler shifts
 AFMatrix computeAF(const Signal& x, const std::vector<double>& tau_values, const std::vector<double>& f_values);
 
 // Declaration of the computeAF function
