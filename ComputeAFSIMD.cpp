@@ -1,4 +1,4 @@
-/* Here is the explanation for the code above:
+/* 
 1. The first part of the code is to initialize the matrix that will be used to store the values of the Ambiguity Function (AF) for each combination of tau and f.
 2. The next part of the code is to calculate the AF for each combination of tau and f. This part is parallelized using OpenMP.
 3. The final part of the code is to print the result for each combination of tau and f. This part is not parallelized.
