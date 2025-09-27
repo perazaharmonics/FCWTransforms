@@ -18,24 +18,22 @@ typedef vector<double> Signal;
 typedef vector<vector<double>> AFMatrix;
 
 AFMatrix computeAF(const Signal& x, const vector<double>& tau_values, const vector<double>& f_values) {
-    int tau_length = tau_values.size();
-    int f_length = f_values.size();
+    int tau_length = tau_values.size();   // number of propagation delay measurements
+    int f_length = f_values.size();       // Number of onserved Doppler shifts on chirpy carrier
+    // The output AF(T,fd) := X(T,fd)
     AFMatrix AF(tau_length, vector<double>(f_length, 0));
-
     // Start the timer
     auto start = system_clock::now();
     time_t start_time = system_clock::to_time_t(start);
     char str[26];
     ctime_s(str, sizeof str, &start_time);
     cout << "Starting the timer at: " << str; // Printing the start time
-
 #pragma omp parallel for collapse(2)
     for (int m = 0; m < tau_length; m++) {
         for (int n = 0; n < f_length; n++) {
             double tau = tau_values[m];
             double f = f_values[n];
             double result = 0;
-
 #pragma omp simd reduction(+:result)
             for (size_t t = 0; t < x.size(); t++) {
                 double time_val = t + tau;
@@ -43,9 +41,8 @@ AFMatrix computeAF(const Signal& x, const vector<double>& tau_values, const vect
                     result += x[t] * x[static_cast<int>(time_val)];
                 }
             }
-
+            // The ambiguity function surface
             AF[m][n] = result;
-
             if (m % 10000 == 0 && n % 10000 == 0) {
                 cout << "For Time Delay " << tau << ", Doppler Shift " << f << ", AF = " << result << endl;
             }
@@ -59,5 +56,5 @@ AFMatrix computeAF(const Signal& x, const vector<double>& tau_values, const vect
     // Print the duration
     cout << "Time taken by function: " << duration.count() << " milliseconds" << endl;
 
-    return AF;
+    return AF; // Show us the target as a peak
 }
