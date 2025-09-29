@@ -91,7 +91,11 @@ AFMatrix computeAF(const Signal& x,
     auto start=std::chrono::system_clock::now();
     std::time_t start_time=std::chrono::system_clock::to_time_t(start);
     char str[26];
-    ctime_s(str,sizeof str,&start_time);
+  #ifdef _WIN32
+    ctime_s(str, sizeof str, &start_time);
+ #else
+    ctime_r(&start_time, str);
+ #endif
     std::cout<<"Starting the timer at: "<<str; // \n included by ctime_s buffer
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
     // Parallelize the (m,n) grid; each thread writes AF[m][n]
