@@ -56,7 +56,7 @@ void ComputeAFParallelCollapse(AFMatrix& AF,const Signal& x,
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 // SIMD-vectorize the inner accumulation over t
 // Uses a reduction to safely combine lane partial sums
-// Hooks after ComputeAF_ParallelCollapse to accumulate && sum AF surface
+// Hooks after ComputeAFParallelCollapse to accumulate && sum AF surface
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
 double SimdCorrelateLaneSum(const Signal& x,double tau)
 {
