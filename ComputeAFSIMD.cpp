@@ -20,7 +20,7 @@ typedef vector<vector<double>> AFMatrix;
 // Parallelize the 2-D AF surface loop nest over (m,n)
 // Each thread owns distinct AF[m][n] cells (race-free)
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-void ComputeAF_ParallelCollapse(AFMatrix& AF,const Signal& x,
+void ComputeAFParallelCollapse(AFMatrix& AF,const Signal& x,
                                 const vector<double>& tau_values,
                                 const vector<double>& f_values)
 {
