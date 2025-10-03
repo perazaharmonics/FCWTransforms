@@ -1063,7 +1063,10 @@ SpectralOps(const vector<T> &s, const WindowType &w, const int windowSize, const
 // ======================== Utility Methods ================================= //
 // Utility Methods to precompute operations needed for Spectral Manipulations.
 // ========================================================================== //
-
+// The twiddle factor is a little trick which tunes the odd indexed samples.
+// we need this because we need to tune the instantenous frequency of the 
+// frequency component in the odd indexed samples to the right position. It rotates
+// to tune.
 inline vector<complex<T>> TwiddleFactor(int N)
 {
     if (twiddles.size() != N / 2)                        // Did we precompute N/2 twiddles before?
