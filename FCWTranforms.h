@@ -1201,17 +1201,20 @@ inline vector<complex<T>> FFTShift(const vector<complex<T>>& X)const
 // Reference:  https://github.com/AndaOuyang/FFT/blob/main/fft.cpp
 // ========================================================================== //
 // Forward FFT Butterfly operation for the Cooley-Tukey FFT algorithm.
-/* @param last: The previous stage of the FFT.
-/*    Time domain signal iff first iteration of the FFT.
-/*    Frequency domain signal iff IFFT.
-/* @param curr: The temporary buffer for the FFT in this iteration.
-/*   Frequency domain spectrum in the last iteration iff FFT
-/*   Time domain signal in the last iteration iff IFFT.
-/* @param twiddles: Vector of precomputed twiddles factors.
-/* @param rot: The current stage of the FFT, iteration indicator. Starts at 0 for the first stage.
-/* @param nBits: log2(N) where N is the length of the signal, total number of FFT stages.
-/* Reference: https://github.com/AndaOuyang/FFT/blob/main/fft.cpp
-*/
+/*
+ * @param last: The previous stage of the FFT.
+ *    Time domain signal iff first iteration of the FFT.
+ *    Frequency domain signal iff IFFT.
+ * @param curr: The temporary buffer for the FFT in this iteration.
+ *   Frequency domain spectrum in the last iteration iff FFT
+ *   Time domain signal in the last iteration iff IFFT.
+ * @param twiddles: Vector of precomputed twiddles factors.
+ * @param rot: The current stage of the FFT, iteration indicator. Starts at 0 for the first stage.
+ * @param nBits: log2(N) where N is the length of the signal, total number of FFT stages.
+ * Reference: https://github.com/AndaOuyang/FFT/blob/main/fft.cpp
+ */
+
+inline void ForwardButterfly(vector<T> &
 
 inline void ForwardButterfly(vector<T> &last, vector<T> &curr, const vector<T> &twiddles, const int rot, const int nBits)
 {
