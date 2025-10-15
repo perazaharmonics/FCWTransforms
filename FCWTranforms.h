@@ -674,10 +674,10 @@ inline vector<double> cwt_forward (
     {
       switch(this->wType)
       {
-        case WaveletType::Morlet:      return this->Morlet(x, w0);
-        case WaveletType::MexicanHat:   return this->MexicanHat(x, t0);
-        case WaveletType::Meyer:        return this->Meyer(x);
-        case WaveletType::Gaussian:     return this->Gaussian(x, a);
+        case WaveletType::Morlet:       return this->MorletPsi(x, w0);
+        case WaveletType::MexicanHat:   return this->MexicanHatPsi(x, t0);
+        case WaveletType::Meyer:        return this->MeyerPsi(x);
+        case WaveletType::Gaussian:     return this->GaussianPsi(x, a);
         default:                        return 0.0; // Unsupported for CWT here
       }
     };
@@ -969,22 +969,22 @@ class DCT
     enum class Type { I, II, III, IV,MDCT,IMDCT };
 
     // ----------- Forward 1-D transforms ----------------------------------- 
-    static vector<T> Transform(
+    static vector<T> Transform (
       const vector<T>& x,               // The input signal to transform.
       Type t,                           // The transform type.
       SpectralOps<T>& engine)           // Our spectral engine.
     {                                   // ----------- Transform -------------
       switch (t)                        // Act according to transform type...
       {                                 // 
-    case Type::I:     return DCTI(x,engine);  // DCT-I
-    case Type::II:    return DCTII(x,engine); // DCT-II
-    case Type::III:   return DCTIII(x,engine);// DCT-III
-    case Type::IV:    return DCTIV(x,engine); // DCT-IV
-    case Type::MDCT:  {
+        case Type::I:     return DCTI(x,engine);  // DCT-I
+        case Type::II:    return DCTII(x,engine); // DCT-II
+        case Type::III:   return DCTIII(x,engine);// DCT-III
+        case Type::IV:    return DCTIV(x,engine); // DCT-IV
+        case Type::MDCT:  {
       // Default to PB sine window for MDCT if none is provided
       sig::spectral::Window<T> W; 
       using WT = typename sig::spectral::Window<T>::WindowType;
-  W.SetWindowType(WT::MLTSine, x.size());
+      W.SetWindowType(WT::MLTSine, x.size());
       return MDCT(x, W, engine);  // MDCT (length N/2 coefficients)
     }
     case Type::IMDCT: {
@@ -992,13 +992,13 @@ class DCT
       const size_t wlen = 2 * x.size();
       sig::spectral::Window<T> W;
       using WT = typename sig::spectral::Window<T>::WindowType;
-  W.SetWindowType(WT::MLTSine, wlen);
+      W.SetWindowType(WT::MLTSine, wlen);
       return IMDCT(x, W, engine); // IMDCT (returns 2N block for OLA)
     }
     default:          return DCTIV(x,engine); // Default to DCT-IV
       }                                 // Done dispatching transform          
     }                                   // ----------- Transform -------------
-    static vector<T> Forward(
+    static vector<T> Forward (
       const vector<T>& timeBlock,       // The time-domain block to transform.
       const Window<T>& analysisW,       // The analysis window to apply.
        SpectralOps<T>& engine)          // Our spectral engine.
