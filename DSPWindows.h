@@ -61,7 +61,7 @@ public:
     auto end(void) const noexcept { return data.cend(); }
     // Accessors
   inline  const Window<T> GetWindow (void) const { return *this; }
-   const inline size_t GetWindowsize (void) const { return windowsize; }
+   inline size_t GetWindowsize (void) const { return windowsize; }
    inline vector<T> GetDefaultWindow (void) { return Rectangular(windowsize);}  
    inline void SetWindowsize (const size_t wsiz) {windowsize=wsiz;}
    inline WindowType GetWindowType (void) const { return window; }   
