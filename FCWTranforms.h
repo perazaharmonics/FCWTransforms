@@ -52,7 +52,11 @@ class WaveletOps
     Db6,                             // Daubechies wavelet type 6.
     Sym5,                            // Symlet type 5
     Sym8,                            // Symlet type 8.
-    Coif5                            // Coiflet type 5 
+    Coif5,                           // Coiflet type 5
+    Morlet,                          // Morlet wavelet.
+    MexicanHat,                      // Mexican Hat wavelet.
+    Meyer,                           // Meyer wavelet.
+    Gaussian                         // Gaussian wavelet. 
   };
   enum class ThresholdType
   {
@@ -61,12 +65,12 @@ class WaveletOps
   };
   public:
     // Constructors
-    explicit WaveletOps(          // Constructor
+  explicit WaveletOps(          // Constructor
       WaveletType wt=WaveletType::Haar, // Our default wavelet.
       size_t levels=1,            // Decomposition level.
       double threshold=0.0f,      // Denoising threshold.
       ThresholdType tt=ThresholdType::Hard)// The denoising type.
-     : wType{wt},levels{levels},threshold{threshold},tType{tt} {}
+   : wType{wt},tType{tt},levels{levels},threshold{threshold} {}
     // ---------------------------- //
     // Denoise: Apply multi-level DWT denoising and reconstruct signal.
     // ---------------------------- //
@@ -218,7 +222,6 @@ idwt_multilevel(vector<pair<vector<double>, vector<double>>>& coeffs, function<v
     return signal;                      // Return Perfectly Reconstructed signal.
 }                                       // ~~~~~~~~~~~ idwt_multilevel ~~~~~~~~~~~~~~~~~~~~~~~~
 
-// Normalization algorithms.
 
 /// Forward wavelet mother waveforms
 inline pair<vector<double>, vector<double>> haar (
@@ -405,8 +408,8 @@ inline pair<vector<double>, vector<double>> coif5(const vector<double>& signal) 
 
     return make_pair(approx, detail);
 }
-                                   
-/// Inverse wavelet reconstruction
+
+// Inverse wavelet reconstruction
 inline vector<double> inverse_haar(const vector<double>& approx, const vector<double>& detail) const
 {
     const vector<double> h_inv = { 0.7071067811865476, 0.7071067811865476 };
@@ -543,6 +546,348 @@ inline vector<double> inverse_coif5(const vector<double>& approx, const vector<d
 
     return reconstructed_signal;
 }
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+// Continuous Wavelet Transforms (CWT)
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+// CWT multilevel with hard/soft thresholding
+inline vector<vector<double>> cwt_multilevel (
+  const vector<double>& signal, 
+  const vector<double>& scales,
+  function<vector<double>(const vector<double>&, double)> wavelet_func,
+  double threshold,
+  const string& threshold_type = "hard") 
+{                                       // ~~~~~~~~~~~ cwt_multilevel ~~~~~~~~~~~~~~~~~~~~~~~~
+    size_t n=signal.size();             // Original signal length
+    size_t n_pad=static_cast<size_t>(next_power_of_2(n));// Next power of 2
+    vector<double> padded_signal=signal;// Copy original signal
+    if (n_pad!=n)                       // Need to pad?
+      padded_signal.resize(n_pad,0.0);  // Yes, zero-pad
+    vector<vector<double>> coeffs;      // CWT coefficients for each scale
+    for (const auto& scale:scales)      // For each scale 
+    {                                   // Compute CWT coefficients
+      auto cwt_coeffs=wavelet_func(padded_signal,scale);
+      // Apply thresholding to the CWT coefficients
+      if (threshold_type == "hard") 
+        cwt_coeffs = hard_threshold(cwt_coeffs, threshold);
+      else if (threshold_type == "soft")
+        cwt_coeffs = soft_threshold(cwt_coeffs, threshold);
+      coeffs.push_back(cwt_coeffs);
+    }
+    return coeffs;
+}                                       // ~~~~~~~~~~~ cwt_multilevel ~~~~~~~~~~~~~~~~~~~~~~~~
+
+// ICWT multilevel reconstruction
+inline vector<double> icwt_multilevel (
+  const vector<vector<double>>& coeffs, // CWT coefficients for each scale
+  function<vector<double>(const vector<double>&, double)> wavelet_func, // Wavelet function
+  const vector<double>& scales)         // Corresponding scales
+{                                       // ~~~~~~~~~~~ icwt_multilevel ~~~~~~~~~~~~~~~~~~~~~~~~
+    if (coeffs.size()!=scales.size())   // Mismatched sizes?
+      throw invalid_argument("Coeffs and scales size mismatch");
+    size_t n=coeffs[0].size();          // Length of each coeff vector
+    vector<double> signal(n,0.0);       // Reconstructed signal
+    for (size_t i=0;i<coeffs.size();++i)// For each scale
+    {                                   // Reconstruct signal
+      auto recon=wavelet_func(coeffs[i],scales[i]);
+      transform(signal.begin(),signal.end(),recon.begin(),signal.begin(),plus<double>());
+    }                                   // Done reconstructing signal
+    return signal;                      // Return reconstructed signal
+}                                       // ~~~~~~~~~~~ icwt_multilevel ~~~~~~~~~~~~~~~~~~~~~~~~
+
+// Scalogram: CWT magnitude squared
+inline vector<vector<double>> Scalogram (
+  const vector<vector<double>>& cwt_coeffs) // CWT coefficients
+{                                       // ~~~~~~~~~~~ Scalogram ~~~~~~~~~~~~~~~~~~~~~~~~
+    vector<vector<double>> scalogram;   // Scalogram output
+    for (const auto& coeffs:cwt_coeffs) // For each scale's coefficients
+    {                                   // Compute magnitude squared
+      vector<double> mag_sq(coeffs.size());// Magnitude squared
+      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+      // Square of each coefficient (magnitude squared)
+      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+      transform(coeffs.begin(),coeffs.end(),mag_sq.begin(),
+        [](double x){return x*x;});
+      scalogram.push_back(mag_sq);      // Add to scalogram
+    }                                   // Done all scales
+    return scalogram;                   // Return scalogram
+}                                       // ~~~~~~~~~~~ Scalogram ~~~~~~~~~~~~~~~~~~~~~~~~
+
+// Select the forward continuous wavelet function
+inline function<vector<double>(const vector<double>&, double)> selectCWTForward (void) const
+{
+  return [this](const vector<double>& signal, double scale)
+  {
+    return this->cwt_forward(signal, scale);
+  };
+}
+
+// --- Scalar mother-wavelet kernels for CWT (psi) --- //
+inline double MorletPsi(double x, double w0) const
+{
+  // Standard real Morlet (unnormalized amplitude as in comments above)
+  // psi(x) = exp(-x^2/2) * cos(w0*x)
+  return std::exp(-0.5 * x * x) * std::cos(w0 * x);
+}
+
+inline double MexicanHatPsi(double x, double /*a*/) const
+{
+  // Ricker (Mexican hat): (1 - x^2) * exp(-x^2/2)
+  const double x2 = x * x;
+  return (1.0 - x2) * std::exp(-0.5 * x2);
+}
+
+inline double MeyerPsi(double x) const
+{
+  // Piecewise Meyer per comment (real part only)
+  const double ax = std::fabs(x);
+  if (ax < 1.0/3.0)
+    return 1.0;
+  if (ax <= 2.0/3.0)
+    return std::sin(M_PI/2.0 * MeyersVx(3.0 * ax - 1.0)) * std::cos(M_PI * x);
+  return 0.0;
+}
+
+inline double GaussianPsi(double x, double a) const
+{
+  // A Gaussian-derivative-like real wavelet variant from comment
+  // psi(x) ~= (1/sqrt(a))*pi^(-1/4) * exp(-x^2/(2a^2)) * (cos(sqrt(2pi/a)*x) - exp(-a/2))
+  if (a <= 0.0) a = 1.0;
+  const double a2 = a * a;
+  const double norm = 1.0 / (std::sqrt(a) * std::pow(M_PI, 0.25));
+  return norm * std::exp(-(x * x) / (2.0 * a2)) * (std::cos(std::sqrt(2.0 * M_PI / a) * x) - std::exp(-a / 2.0));
+}
+
+// cwt_forward: Continuous Wavelet Transform (CWT) using the selected wavelet
+inline vector<double> cwt_forward (
+  const vector<double>& s,
+  double scale,
+  double w0=5.0,
+  double t0=1.0,
+  double a=1.0) const
+{                                       // ~~~~~~~~~~~ cwt_forward ~~~~~~~~~~~~~~~~~~~~~~~~
+    size_t n=s.size();             // Signal length
+    vector<double> coeffs(n,0.0);       // CWT coefficients
+    if (scale <= 0.0) scale = 1.0;     // Guard against invalid scale
+    // Choose wavelet kernel psi(x) based on wType
+    auto psi = [this, w0, t0, a](double x) -> double
+    {
+      switch(this->wType)
+      {
+        case WaveletType::Morlet:      return this->Morlet(x, w0);
+        case WaveletType::MexicanHat:   return this->MexicanHat(x, t0);
+        case WaveletType::Meyer:        return this->Meyer(x);
+        case WaveletType::Gaussian:     return this->Gaussian(x, a);
+        default:                        return 0.0; // Unsupported for CWT here
+      }
+    };
+    // Compute CWT coefficients
+    for (size_t i=0;i<n;++i)            // For each time point
+    {                                   // Compute CWT coefficient
+      double t=i;                       // Time index
+      double sum=0.0;                   // Accumulator
+      for (size_t j=0;j<n;++j)          // For each signal sample
+      {                                 // Compute contribution
+        double tau=j;                   // Sample index
+        double wt=psi((t-tau)/scale);   // Wavelet value at scaled time
+        sum+=s[j]*wt;                   // Accumulate contribution
+      }                                 // Done signal samples
+      coeffs[i]=sum/sqrt(scale);        // Normalize by sqrt(scale)
+    }                                   // Done time points
+    return coeffs;                      // Return CWT coefficients
+}                                       // ~~~~~~~~~~~ cwt_forward ~~~~~~~~~~~~~~~~~~~~~~~~
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+// Morlet wavelet decomposition
+// PSI(x) = e^-x/2*cos(5*x)
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+inline pair<vector<double>,vector<double>> Morlet (
+  const vector<double>& s,
+  double w0=5.0)
+{                                       // ~~~~~~~~~~~~~ Morlet ~~~~~~~~~~~~~~~~~ //
+  size_t n=s.size();                    // Length of input signal.
+  vector<double> approx(n),detail(n);   // Where to store LP & HP output samples.
+  double A=1.0/sqrt(2.0*M_PI);          // Normalization constant.
+  double s_inv=1.0/w0;                  // Scale inverse.
+  for (size_t i=0;i<n;++i)              // For each input sample...
+  {                                     // Convolute with Morlet wavelet.
+    double t=i-n/2;                     // Center time around zero.
+    double morlet=A*exp(-t*t/(2*s_inv*s_inv))*cos(w0*t/s_inv);// Morlet wavelet
+    approx[i]=s[i]*morlet;              // Lowpass output (approx)
+    detail[i]=s[i]*(1.0-morlet);        // Highpass output (detail)
+  }                                     // Done producing approx and detail coeffs.
+  return make_pair(approx,detail);      // Return both produced signals.
+}                                       // ~~~~~~~~~~~~~ Morlet ~~~~~~~~~~~~~~~~~ //
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+// Mexican hat wavelet decomposition
+// PSI(x) = (1-x^2)*e^-x/2
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+inline pair<vector<double>,vector<double>> MexicanHat (
+  const vector<double>& s,
+  double a=1.0)
+{                                       // ~~~~~~~~~~ MexicanHat ~~~~~~~~~~~~~~~~~~ //
+  size_t n=s.size();                    // Length of input signal.
+  vector<double> approx(n),detail(n);   // Where to store LP & HP output samples.
+  double A=2.0/(sqrt(3.0*a)*pow(M_PI,0.25));// Normalization constant.
+  double a2=a*a;                        // a^2
+  for (size_t i=0;i<n;++i)              // For each input sample...
+  {                                     // Convolute with Mexican Hat wavelet.
+    double t=i-n/2;                     // Center time around zero.
+    double t2=t*t;                      // t^2
+    double mexhat=A*(1.0-t2/a2)*exp(-t2/(2*a2));// Mexican Hat wavelet
+    approx[i]=s[i]*mexhat;              // Lowpass output (approx)
+    detail[i]=s[i]*(1.0-mexhat);        // Highpass output (detail)
+  }                                     // Done producing approx and detail coeffs.
+  return make_pair(approx,detail);      // Return both produced signals.
+}                                       // ~~~~~~~~~~ MexicanHat ~~~~~~~~~~~~~~~~~~ //
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+// Meyer wavelet decomposition
+// PSI(x) = sin(pi/2*v(3|x|-1))*e^(j*pi*x) for 1/3<=|x|<=2/3
+//        = 1 for |x|<1/3
+//        = 0 for |x|>2/3
+// v(x)   = 0 for x<0
+//        = x^3(35/32 - 35/16*x + 21/16*x^2 - 5/8*x^3) for 0<=x<1
+//        = 1 for x>=1
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+inline pair<vector<double>,vector<double>> Meyer (
+  const vector<double>& s)
+{                                       // ~~~~~~~~~~~~~ Meyer ~~~~~~~~~~~~~~~~~~ //
+  size_t n=s.size();                    // Length of input signal.
+  vector<double> approx(n),detail(n);   // Where to store LP & HP output samples.
+  for (size_t i=0;i<n;++i)              // For each input sample
+  {                                     // Convolute with Meyer wavelet.
+    double t=i-n/2;                     // Center time around zero.
+    double t_abs=fabs(t);               // |t|
+    double meyer=0.0;                   // Meyer wavelet
+    if (t_abs<1.0/3.0)                  // |t|<1/3
+      meyer=1.0;                        // Psi=1
+    else if (t_abs>=1.0/3.0&&t_abs<=2.0/3.0)// 1/3<=|t|<=2/3
+      meyer=sin(M_PI/2.0*MeyersVx(3.0*t_abs-1.0))*cos(M_PI*t);// Psi
+    else                                // |t|>2/3
+      meyer=0.0;                        // Psi=0
+    approx[i]=s[i]*meyer;               // Lowpass output (approx)
+    detail[i]=s[i]*(1.0-meyer);         // Highpass output (detail)
+  }                                     // Done producing approx and detail coeffs.
+  return make_pair(approx,detail);      // Return both produced signals.
+}                                       // ~~~~~~~~~~~~~ Meyer ~~~~~~~~~~~~~~~~~~ //
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+// v(x) function used in Meyer wavelet
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+inline double MeyersVx (
+  double x) const                       // v(x) function
+{                                       // ~~~~~~~~~~~~~ MeyersVx ~~~~~~~~~~~~~~~~~~ //
+  if (x<0.0)                            // Outside support
+    return 0.0;                         // v(x)=0
+  else if (x>=0.0&&x<1.0)               // Within compact support grid?
+    return x*x*x*(35.0/32.0-35.0/16.0*x+21.0/16.0*x*x-5.0/8.0*x*x*x);
+  else                                  // Outside support
+    return 1.0;                         // v(x)=1
+}                                       // ~~~~~~~~~~~~~ MeyersVx ~~~~~~~~~~~~~~~~~~ //
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+// Gaussian wavelet decomposition
+// PSI(x) = (1/sqrt(a))*pi^(-1/4)*e^(-x^2/2a^2)*(e^(j*sqrt(2pi/a)x)-e^(-a/2))
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ inline pair<vector<double>,vector<double>> GaussianWavelet (
+  const vector<double>& s,              // Input signal
+  double a=1.0)                         // Scale parameter
+{                                       // ~~~~~~~~~~ GaussianWavelet ~~~~~~~~~~~~~~~~~~ //
+  size_t n=s.size();                    // Length of input signal.
+  vector<double> approx(n),detail(n);   // Where to store LP & HP output samples.
+  double A=1.0/(sqrt(a)*pow(M_PI,0.25)); // Normalization constant.
+  double a2=a*a;                        // a^2
+  for (size_t i=0;i<n;++i)              // For each input sample...
+  {                                     // Convolute with Gaussian wavelet.
+    double t=i-n/2;                     // Center time around zero.
+    double t2=t*t;                      // t^2
+    double gauss=A*exp(-t2/(2*a2))*(cos(sqrt(2.0*M_PI/a)*t)-exp(-a/2.0));// Gaussian wavelet
+    approx[i]=s[i]*gauss;               // Lowpass output (approx)
+    detail[i]=s[i]*(1.0-gauss);         // Highpass output (detail)
+  }                                     // Done producing approx and detail coeffs.
+  return make_pair(approx,detail);      // Return both produced signals.
+}                                       // ~~~~~~~~~~ GaussianWavelet ~~~~~~~~~~~~~~~~~~ //
+// Inverse Morlet wavelet reconstruction
+inline vector<double> InverseMorlet (
+  const vector<double>& approx,
+  const vector<double>& detail,
+  double w0=6.0)
+{                                       // ~~~~~~~~~~ InverseMorlet ~~~~~~~~~~~~~~~~~~ //
+  size_t n=approx.size();               // Length of input signal.
+  vector<double> reconstructed_signal(2*n,0.0);// Where to store reconstructed signal.
+  double A=1.0/sqrt(2.0*M_PI);          // Normalization constant.
+  double s_inv=1.0/w0;                  // Scale inverse.
+  for (size_t i=0;i<n;++i)              // For each input sample...
+  {                                     // Reconstruct with Morlet wavelet.
+    double t=2*i-n;                     // Center time around zero.
+    double morlet=A*exp(-t*t/(2*s_inv*s_inv))*cos(w0*t/s_inv);// Morlet wavelet
+    reconstructed_signal[2*i]+=approx[i]*morlet;// Lowpass output (approx)
+    reconstructed_signal[2*i+1]+=detail[i]*(1.0-morlet);// Highpass output (detail)
+  }                                     // Done producing approx and detail coeffs.
+  return reconstructed_signal;          // Return reconstructed signal.
+}                                       // ~~~~~~~~~~ InverseMorlet ~~~~~~~~~~~~~~~~~~ //
+// Inverse Mexican Hat wavelet reconstruction
+inline vector<double> InverseMexicanHat (
+  const vector<double>& approx,         // Low frequency coefficients
+  const vector<double>& detail,         // High frequency coefficients 
+  double a=1.0)                         // Scale parameter
+{                                       // ~~~~~~~~ InverseMexicanHat ~~~~~~~~~~~~~~~~~~ //
+  size_t n=approx.size();               // Length of input signal.
+  vector<double> reconstructed_signal(2*n,0.0);// Where to store reconstructed signal.
+  double A=2.0/(sqrt(3.0*a)*pow(M_PI,0.25));// Normalization constant.
+  double a2=a*a;                        // a^2
+  for (size_t i=0;i<n;++i)              // For each input sample...
+  {                                     // Reconstruct with Mexican Hat wavelet.
+    double t=2*i-n;                     // Center time around zero.
+    double t2=t*t;                      // t^2
+    double mexhat=A*(1.0-t2/a2)*exp(-t2/(2*a2));// Mexican Hat wavelet
+    reconstructed_signal[2*i]+=approx[i]*mexhat;// Lowpass output (approx)
+    reconstructed_signal[2*i+1]+=detail[i]*(1.0-mexhat);// Highpass output (detail)
+  }                                     // Done producing approx and detail coeffs.
+  return reconstructed_signal;          // Return reconstructed signal.
+}                                       // ~~~~~~~~ InverseMexicanHat ~~~~~~~~~~~~~~~~~~ 
+// Inverse Meyer wavelet Perfect Reconstruction Filter Bank
+inline vector<double> InverseMeyer (
+  const vector<double>& approx,         // Low frequency coefficients
+  const vector<double>& detail)         // High frequency coefficients
+{                                       // ~~~~~~~~~~ InverseMeyer ~~~~~~~~~~~~~~~~~~ //
+  size_t n=approx.size();               // Length of input signal.
+  vector<double> reconstructed_signal(2*n,0.0);// Where to store reconstructed signal.
+  for (size_t i=0;i<n;++i)              // For each input sample...
+  {                                     // Reconstruct with Meyer wavelet.
+    double t=2*i-n;                     // Center time around zero.
+    double t_abs=fabs(t);               // |t|
+    double meyer=0.0;                   // Meyer wavelet
+    if (t_abs<1.0/3.0)                  // |t|<1/3
+      meyer=1.0;                        // Psi=1
+    else if (t_abs>=1.0/3.0&&t_abs<=2.0/3.0)// 1/3<=|t|<=2/3
+      meyer=sin(M_PI/2.0*MeyersVx(3.0*t_abs-1.0))*cos(M_PI*t);// Psi
+    else                                // |t|>2/3
+      meyer=0.0;                        // Psi=0
+    reconstructed_signal[2*i]+=approx[i]*meyer;// Lowpass output (approx)
+    reconstructed_signal[2*i+1]+=detail[i]*(1.0-meyer);// Highpass output (detail)
+  }                                     // Done producing approx and detail coeffs.
+  return reconstructed_signal;          // Return reconstructed signal.
+}                                       // ~~~~~~~~~~ InverseMeyer ~~~~~~~~~~~~~~~~~~ //
+
+// Inverse Gaussian wavelet reconstruction
+inline vector<double> InverseGaussianWavelet (
+  const vector<double>& approx,         // Low frequency coefficients
+  const vector<double>& detail,         // High frequency coefficients
+  double a=1.0)                         // Scale parameter
+{                                       // ~~~~~~~ InverseGaussianWavelet ~~~~~~~~~~~~~~~~~~ //
+  size_t n=approx.size();               // Length of input signal.
+  vector<double> reconstructed_signal(2*n,0.0);// Where to store reconstructed signal.
+  double A=1.0/(sqrt(a)*pow(M_PI,0.25)); // Normalization constant.
+  double a2=a*a;                        // a^2
+  for (size_t i=0;i<n;++i)              // For each input sample...
+  {                                     // Reconstruct with Gaussian wavelet.
+    double t=2*i-n;                     // Center time around zero.
+    double t2=t*t;                      // t^2
+    double gauss=A*exp(-t2/(2*a2))*(cos(sqrt(2.0*M_PI/a)*t)-exp(-a/2.0));// Gaussian wavelet
+    reconstructed_signal[2*i]+=approx[i]*gauss;// Lowpass output (approx)
+    reconstructed_signal[2*i+1]+=detail[i]*(1.0-gauss);// Highpass output (detail)
+  }                                     // Done producing approx and detail coeffs.
+  return reconstructed_signal;          // Return reconstructed signal.
+}                                       // ~~~~~~~ InverseGaussianWavelet ~~~~~~~~~~~~~~~~~~ //
+
 
 inline vector<double> hard_threshold(const vector<double>& detail, double threshold) 
 {
