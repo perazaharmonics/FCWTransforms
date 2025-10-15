@@ -33,10 +33,7 @@
 #endif
 #include "FCWTransforms.h"
 #include "DSPWindows.h"
-
-// Minimal status type (no exceptions). If caller defines sdr::Status elsewhere,
-// this identical enum should be ABI-compatible; otherwise this provides it.
-namespace sdr{enum class Status:int{Ok=0,Err=1,Invalid=2,Unimpl=3};}
+#include "../SDRTypes.hpp"
 
 namespace sig::spectral::simd{
   using std::vector;using std::complex;using sdr::Status;
@@ -207,7 +204,45 @@ namespace sig::spectral::simd{
       return n+1;
     }
   }
-
+    // SIMD HELPERS
+    template<typename T=float>
+    static inline void SIMDMAG2 (
+      const T* const iq,                // Input complex data (AoS: re,im,re,im,...)
+      T* const out,                     // Output magnitude data
+      const int32_t N)                  // Number of complex samples
+    {                                   // ~~~~~~~~~~ SIMDMAG2 ~~~~~~~~~~ //
+#if defined(__AVX2__)
+      if constexpr(std::is_same<T,float>::value)
+      {
+        const float* p = reinterpret_cast<const float*>(iq);
+        int32_t i=0;
+        for(;i+8<=N;i+=8)
+        {
+          __m256 vr = _mm256_loadu_ps(p + 2*i + 0);
+          __m256 vi = _mm256_loadu_ps(p + 2*i + 8);
+          __m256 vr2= _mm256_mul_ps(vr, vr);
+          __m256 vi2= _mm256_mul_ps(vi, vi);
+          __m256 vm = _mm256_add_ps(vr2, vi2);
+          _mm256_storeu_ps(out + i, vm);
+        }
+        for(;i<N;++i)
+        {
+          float r = p[2*i+0];
+          float im= p[2*i+1];
+          out[i]= r*r + im*im;
+        }
+        return;
+      }
+#endif
+      // Scalar fallback (double or no AVX2)
+      const T* p = reinterpret_cast<const T*>(iq);
+      for (int32_t i=0;i<N;++i)
+      {
+        T r = p[2*i+0];
+        T im= p[2*i+1];
+        out[i]= r*r + im*im;
+      }
+    }                                   // ~~~~~~~~~~ SIMDMAG2 ~~~~~~~~~~ //   
   // =====================================================================
   // WaveletOps SIMD (focus on hot inner loops: thresholding & Haar steps)
   // =====================================================================
@@ -229,7 +264,7 @@ namespace sig::spectral::simd{
         {                               // Is it a float?
           const float t=static_cast<float>(thr);// cast threshold to float
           size_t i=0;                   // Loop index
-          #if defined(__AVX2__)         // AVX2 path
+#if defined(__AVX2__)         // AVX2 path
             __m256 vt=_mm256_set1_ps(t);// Broadcast threshold
             for(;i+8<=n;i+=8)           // Process 8 at a time
             {                           // Loop body
@@ -240,7 +275,7 @@ namespace sig::spectral::simd{
               __m256 vy=_mm256_blendv_ps(vx,zr,m);// blend
               _mm256_storeu_ps(out.data()+i,vy);// store result
             }                           // Loop body
-          #endif
+#endif
           for(;i<n;++i)                 // Remainder
           {                             // Loop body
             float v=static_cast<float>(det[i]);// Load value
@@ -317,9 +352,9 @@ namespace sig::spectral::simd{
       {                                 // ~~~~~~~~~~~ HaarLevel ~~~~~~~~~~~~~ //
         size_t n=sig.size();            // Length of signal
         if(n<2)                         // Must be at least 2 samples
-          return Status::Invalid;       // Invalid
+          return Status::Arg;           // Invalid argument
         if(n%2!=0)                      // Must be even length
-          return Status::Invalid;       // Invalid
+          return Status::Arg;           // Invalid argument
         size_t h=n/2;                   // Half-length
         app.resize(h);                  // Resize output
         det.resize(h);                  // Resize output
@@ -342,7 +377,7 @@ namespace sig::spectral::simd{
       {
         size_t h=app.size();
         if(h==0||h!=det.size())
-          return Status::Invalid;
+          return Status::Arg;
         sig.resize(h*2);
         if constexpr(std::is_same<T,float>::value)
         {
@@ -535,7 +570,7 @@ namespace sig::spectral::simd{
           case WT::Sym5:st=Sym5Level(s,a,d);break;
           case WT::Sym8:st=Sym8Level(s,a,d);break;
           case WT::Coif5:st=Coif5Level(s,a,d);break;
-          default:return Status::Unimpl;
+          default:return Status::Err;
         }
         if (st!=Status::Ok)             // Check status
           return st;                    // Return on error
@@ -546,7 +581,7 @@ namespace sig::spectral::simd{
           {
             case TT::Hard:st=HardThreshold(d,thr,dt);break;
             case TT::Soft:st=SoftThreshold(d,thr,dt);break;
-            default:return Status::Unimpl;
+            default:return Status::Err;
           }
           if (st!=Status::Ok)           // Check status
             return st;                  // Return on error
@@ -571,7 +606,7 @@ namespace sig::spectral::simd{
       vector<T>& sig) noexcept          // Output signal
     {                                   // ~~~~~~~~~~~ IDWTMultilevel ~~~~~~~~~~~~~ //
       if(app.empty()||app.size()!=det.size())// Bad args?
-        return Status::Invalid;         // Yes, return invalid status
+  return Status::Arg;             // Invalid argument
       size_t n=app.back().size();       // Length of coarsest approx coeffs
       sig=app.back();                   // Start with coarsest approx coeffs
       // Iterate from coarsest to finest level
@@ -586,7 +621,7 @@ namespace sig::spectral::simd{
           case WT::Sym5:st=Sym5Inverse(sig,det[l],s);break;
           case WT::Sym8:st=Sym8Inverse(sig,det[l],s);break;
           case WT::Coif5:st=Coif5Inverse(sig,det[l],s);break;
-          default:return Status::Unimpl;
+          default:return Status::Err;
         }                               // Check status
         if (st!=Status::Ok)             // Error?
           return st;                    // Yes, return error status
@@ -637,14 +672,14 @@ namespace sig::spectral::simd{
         const vector<T>& sca,vector<T>& sig) noexcept // Inverse CWT
       {                                 // ~~~~~~~~~~~ ICWTMultilevel ~~~~~~~~~~~~~ //
         if(coeffs.empty()||coeffs.size()!=sca.size())// Bad args?
-          return Status::Invalid;       // Yes, return invalid status
+          return Status::Arg;           // Invalid argument
         size_t n=coeffs[0].size();      // Length of coeffs
         sig.assign(n,T(0));             // Start with zero signal
         for(size_t i=0;i<coeffs.size();++i)// For each scale
         {                               // Reconstruct contribution at this scale
           vector<T> rec=wfunc(coeffs[i],sca[i]);// Reconstructed signal at this scale
           if(rec.size()!=n)             // Bad size?
-            return Status::Invalid;     // Yes, return invalid status
+            return Status::Arg;         // Invalid argument
           for(size_t k=0;k<n;++k)       // Accumulate
             sig[k]+=rec[k];             // into output signal
         }                               // Done scales
@@ -724,7 +759,7 @@ namespace sig::spectral::simd{
       {                                 // ~~~~~~~~~~~ CWTForward ~~~~~~~~~~~~~ //
         size_t n=sig.size();            // Length of signal
         if (n==0||sc<=T(0))             // Bad args?
-          return Status::Invalid;       // Yes, return invalid status
+          return Status::Arg;           // Invalid argument
         cof.assign(n,T(0));             // Resize output coeffs
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // Build reversed psi kernel for 'same' convolution: h_rev[j]=psi(((n-1)-j)/sc)
@@ -865,7 +900,7 @@ namespace sig::spectral::simd{
       {
         size_t n=app.size();
         if(det.size()!=n)
-          return Status::Invalid;
+          return Status::Arg;
         rec.assign(2*n,T(0));
         T A=T(1)/std::sqrt(T(2)*T(M_PI));
         T si=T(1)/w0;
@@ -886,7 +921,7 @@ namespace sig::spectral::simd{
       {
         size_t n=app.size();
         if(det.size()!=n)
-          return Status::Invalid;
+          return Status::Arg;
         rec.assign(2*n,T(0));
         T A=T(2)/(std::sqrt(T(3)*a)*std::pow(T(M_PI),T(0.25)));
         T a2=a*a;
@@ -907,7 +942,7 @@ namespace sig::spectral::simd{
       {
         size_t n=app.size();
         if(det.size()!=n)
-          return Status::Invalid;
+          return Status::Arg;
         rec.assign(2*n,T(0));
         for(size_t i=0;i<n;++i)
         {
@@ -939,7 +974,7 @@ namespace sig::spectral::simd{
       {
         size_t n=x.size();
         if(n==0)
-          return Status::Invalid;
+          return Status::Arg;
         X.assign(n,T(0));
         const T s0=std::sqrt(T(1)/T(n));
         const T s=std::sqrt(T(2)/T(n));
@@ -977,7 +1012,7 @@ namespace sig::spectral::simd{
       {
         size_t n=x.size();
         if(n<2)
-          return Status::Invalid;
+          return Status::Arg;
         X.assign(n,T(0));
         const T fac=std::sqrt(T(2)/T(n-1));
         vector<T> ax(n,T(0));
@@ -1021,7 +1056,7 @@ namespace sig::spectral::simd{
       {
         size_t n=X.size();
         if(n==0)
-          return Status::Invalid;
+          return Status::Arg;
         x.assign(n,T(0));
         const T s0=std::sqrt(T(1)/T(n));
         const T s=std::sqrt(T(2)/T(n));
@@ -1061,7 +1096,7 @@ namespace sig::spectral::simd{
       {
         size_t n=x.size();
         if(n==0)
-          return Status::Invalid;
+          return Status::Arg;
         X.assign(n,T(0));
         const T s=std::sqrt(T(2)/T(n));
         vector<T> cosv(n*n,T(0));
@@ -1103,7 +1138,7 @@ namespace sig::spectral::simd{
           case Type::III: return DCTIII(in,out);
           case Type::IV: return DCTIV(in,out);
         }
-        return Status::Invalid;
+  return Status::Arg;
       }
 
       // --------------------- MDCT/IMDCT ---------------------
@@ -1115,7 +1150,7 @@ namespace sig::spectral::simd{
       {
         size_t L=tb.size();
         if(L==0||win.Size()!=L||L%2!=0)
-          return Status::Invalid;
+          return Status::Arg;
         size_t N=L/2;
         X.assign(N,T(0));
         vector<T> xw(L,0);
@@ -1156,7 +1191,7 @@ namespace sig::spectral::simd{
         size_t N=X.size();
         size_t L=win.Size();
         if(N==0||L!=2*N)
-          return Status::Invalid;
+          return Status::Arg;
         tb.assign(L,T(0));
         const T c=T(M_PI)/T(N);
         // Precompute cosine matrix column-major for dot-usage: n rows, k cols
@@ -1210,7 +1245,7 @@ namespace sig::spectral::simd{
       {
         size_t n=in.size();
         if(n!=win.Size())
-          return Status::Invalid;
+          return Status::Arg;
         out.resize(n);
         if constexpr(std::is_same<T,float>::value)
         {
@@ -1238,7 +1273,7 @@ namespace sig::spectral::simd{
       {
         size_t n=x.size();
         if(n==0)
-          return Status::Invalid;
+          return Status::Arg;
         X.assign(n,{});
         const T tw=-T(2)*T(M_PI)/T(n);
         // Separate real/imag for better vectorization
@@ -1271,7 +1306,7 @@ namespace sig::spectral::simd{
         vector<std::complex<T>>& y) noexcept
       {
         if(x.size()!=h.size())
-          return Status::Invalid;
+          return Status::Arg;
         size_t n=x.size();
         y.resize(n);
         for(size_t i=0;i<n;++i)
@@ -1330,7 +1365,7 @@ namespace sig::spectral::simd{
         vector<T>& y) noexcept
       {
         if(a.size()<b.size()||b.empty())
-          return Status::Invalid;
+          return Status::Arg;
         size_t na=a.size(),nb=b.size(),ny=na-nb+1;
         y.assign(ny,T(0));
         if constexpr(std::is_same<T,float>::value)
@@ -1354,9 +1389,9 @@ namespace sig::spectral::simd{
       {                                 // ~~~~~~~~~~~ FFT ~~~~~~~~~~~~~ //
         size_t n=x.size();              // Length of input
         if (n==0)                       // Bad args?
-          return Status::Invalid;       // Yes, return invalid status
+          return Status::Arg;           // Invalid argument
         if ((n&(n-1))!=0)               // Not power of 2?
-          return Status::Invalid;       // Yes, return invalid status
+          return Status::Arg;           // Invalid argument
         X=x;                            // copy input
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // Bit-reversal permutation
@@ -1534,7 +1569,7 @@ namespace sig::spectral::simd{
         {
         size_t n=X.size();
         if (n==0)
-          return Status::Invalid;
+          return Status::Arg;
         vector<std::complex<T>> tmp=X;
         for(size_t i=0;i<n;++i)
           tmp[i]=std::conj(tmp[i]);
@@ -1557,14 +1592,14 @@ namespace sig::spectral::simd{
         vector<vector<std::complex<T>>>& frames) noexcept // Output frames
         {                                   // ~~~~~~~~~~~ STFT ~~~~~~~~~~~~~ //
         if(winSize<=0||win.GetWindowsize()!=size_t(winSize))// Bad args?
-          return Status::Invalid;           // Yes, return invalid status
+          return Status::Arg;               // Invalid argument
         size_t N=winSize;                   // Window size
         size_t H=std::max<size_t>(1,size_t(N*(1.0f-ov)));// Hop size
         if(H==0)                            // Ensure hop size is at least 1
           H=1;                              // Set to 1
         size_t L=sig.size();                // Signal length
         if(L<N)                             // Signal too short?
-          return Status::Invalid;           // Yes, return invalid status
+          return Status::Arg;               // Invalid argument
         size_t nf=1+(L-N)/H;                // Number of frames
         frames.assign(nf,vector<std::complex<T>>(N));// Allocate output
         vector<T> w=win.GetData();          // Get window data
@@ -1590,7 +1625,7 @@ namespace sig::spectral::simd{
         vector<std::complex<T>>& sig) noexcept // Output signal
       {                                 // ~~~~~~~~~~ ISTFT ~~~~~~~~~~~~~ //
         if(frames.empty())              // No frames?
-          return Status::Invalid;       // Yes, return invalid
+          return Status::Arg;           // Invalid argument
         size_t N=winSize;               // Window size
         size_t nf=frames.size();        // Number of frames
         size_t H=std::max<size_t>(1,size_t(N*(1.0f-ov)));// Hop size
@@ -1621,7 +1656,7 @@ namespace sig::spectral::simd{
         vector<T>& psd) noexcept        // Output PSD
       {                                 // ~~~~~~~~~~ PSD ~~~~~~~~~~~~~ //
         if (nfft<=0)                    // Bad args?     
-          return Status::Invalid;       // Yes, return invalid status
+          return Status::Arg;           // Invalid argument
         size_t N=nfft;                  // FFT size
         vector<std::complex<T>> cx(N);  // Complex buffer
         for(size_t i=0;i<N;++i)         // For each sample in the signal.
@@ -1663,11 +1698,11 @@ namespace sig::spectral::simd{
         vector<T>& psd) noexcept        // Output PSD
       {                                 // ~~~~~~~~~~ PSD Welch ~~~~~~~~~~~~~ //
         if (seg<=0||nfft<=0||overlap<0||overlap>=seg)// Bad args?
-          return Status::Invalid;       // Yes, return invalid status
+          return Status::Arg;           // Invalid argument
         size_t N=seg;                   // Segment size
         size_t H=seg-overlap;           // Hop size
         if (x.size()<N)                 // Signal too short?
-          return Status::Invalid;       // Yes, return invalid status
+          return Status::Arg;       // Yes, return invalid status
         Window<T> w(wtype,N);           // Create window
         vector<T> wd=w.GetData();       // Get samples of window
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -1677,7 +1712,7 @@ namespace sig::spectral::simd{
         for(auto v:wd)                  // For the length of the signal
           ws+=v*v;                      // Accumulate square
         if (ws==T(0))                   // All-zero window?
-          return Status::Invalid;       // Yes, return invalid
+          return Status::Arg;           // Invalid argument
         T wnorm=T(1)/ws;                // Normalization factor
         size_t nf=1+(x.size()-N)/H;     // Number of frames
         vector<T> acc(nfft/2+1,T(0));   // Accumulator
