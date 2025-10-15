@@ -880,10 +880,10 @@ public:
     xFrame_.assign(cfg_.windowLen, T(0));
     ola_.assign(cfg_.windowLen, T(0));
     ring_.clear();
-    ring_.reserve(8); // tiny cache of recent frames’ MDCT coeffs
+    ring_.reserve(8); // tiny cache of recent frames? MDCT coeffs
   }
 
-  // Process a block of audio. This consumes input with hop-sized increments and returns OLA’d output.
+  // Process a block of audio. This consumes input with hop-sized increments and returns OLA?d output.
   // You can feed this in a pull model: push hop samples at a time and collect hop samples back.
   std::vector<T> processHop(const std::vector<T>& inHop,
                             SpectralOps<T>& engine)
@@ -1012,15 +1012,15 @@ public:
 
 
     // Accessors
-    const inline vector<T> GetSignal (void) const { return signal; }
+  inline vector<T> GetSignal (void) const { return signal; }
     inline void SetSignal (const vector<complex<T>>& s) {signal=s;}
-    const inline int GetSamples (void) const { return length; }
+  inline int GetSamples (void) const { return length; }
     inline void SetSamples (const int N) {length=N;}
-    const inline double GetSampleRate (void) const { return sRate; }
+  inline double GetSampleRate (void) const { return sRate; }
     inline void SetSampleRate (const double fs) {sRate=fs;}
-    const inline vector<complex<T>> GetTwiddles (void) const { return twiddles; }
-    inline void SetSubCarrier(const vector<complex<T>> &s) { subCarrier = s; }
-    const inline vector<complex<T>> GetSubCarrier (void) { return subCarrier; } 
+  inline vector<complex<T>> GetTwiddles (void) const { return twiddles; }
+  inline void SetSubCarrier(const vector<complex<T>> &s) { subCarrier = s; }
+  inline vector<complex<T>> GetSubCarrier (void) { return subCarrier; } 
     
 // ------------------------------------ //
 // Constructors and Destructors
@@ -1069,11 +1069,11 @@ SpectralOps(const vector<T> &s, const WindowType &w, const int windowSize, const
 // It rotates the phase to tune.
 inline vector<complex<T>> TwiddleFactor(int N)
 {
-    if (twiddles.size() != N / 2)                        // Did we precompute N/2 twiddles before?
+  if (twiddles.size() != static_cast<size_t>(N / 2))    // Did we precompute N/2 twiddles before?
     {                                                    // No, so we..
-        twiddles.resize(N / 2);                          // Resize the twiddles factor vector.
-        for (int i = 0; i < N / 2; ++i)                  //  loop for the N/2 points and
-            twiddles[i] = polar(1.0, -2 * M_PI * i / N); //  compute the twiddles factors.
+    twiddles.resize(static_cast<size_t>(N / 2));     // Resize the twiddles factor vector.
+    for (int i = 0; i < N / 2; ++i)                  //  loop for the N/2 points and
+      twiddles[static_cast<size_t>(i)] = polar(1.0, -2 * M_PI * i / N); //  compute the twiddles factors.
     }
     return twiddles;
 }
@@ -1135,7 +1135,7 @@ inline int ModInv(int a,int m)const
   if(t<0)t+=m;
   return static_cast<int>(t);
 }
-// Find a primitive root g modulo prime p (tiny search is ok for FFT sizes we’ll use).
+// Find a primitive root g modulo prime p (tiny search is ok for FFT sizes we?ll use).
 inline int PrimitiveRootPrime(int p)const
 {
   // Factor p-1 into its prime factors (trial division is fine here).
@@ -1213,8 +1213,6 @@ inline vector<complex<T>> FFTShift(const vector<complex<T>>& X)const
  * @param nBits: log2(N) where N is the length of the signal, total number of FFT stages.
  * Reference: https://github.com/AndaOuyang/FFT/blob/main/fft.cpp
  */
-
-inline void ForwardButterfly(vector<T> &
 
 inline void ForwardButterfly(vector<T> &last, vector<T> &curr, const vector<T> &twiddles, const int rot, const int nBits)
 {
@@ -1355,9 +1353,9 @@ inline void  BitReversal(vector<T> &s, const int nBits)
     // Permute the signal using the bit-reversed indices.
     // Swap elements if the bit-reversed index is greater than the current index.
     //--------------------------------- //
-  for (int i=0; i<s.size();++i)         // For all elements in the signal.
-    if (i<revNdx[i])                    // If the index is less than the bit-reversed index.
-      swap(s[i], s[revNdx[i]]);         // Swap the elements.             
+  for (size_t i=0; i<s.size();++i)      // For all elements in the signal.
+    if (static_cast<int>(i)<revNdx[i])  // If the index is less than the bit-reversed index.
+      swap(s[i], s[static_cast<size_t>(revNdx[i])]); // Swap the elements.             
 }                                       // End of the function.
 // Overloaded for complex vectors.
 inline void  BitReversal(vector<std::complex<T>> &s, const int nBits)
@@ -1419,21 +1417,21 @@ inline void  BitReversal(vector<std::complex<T>> &s, const int nBits)
     // Permute the signal using the bit-reversed indices.
     // Swap elements if the bit-reversed index is greater than the current index.
     //--------------------------------- //
-  for (int i=0; i<s.size();++i)         // For all elements in the signal.
-    if (i<revNdx[i])                    // If the index is less than the bit-reversed index.
-      swap(s[i], s[revNdx[i]]);         // Swap the elements.             
+    for (size_t i=0; i<s.size();++i)      // For all elements in the signal.
+      if (static_cast<int>(i)<revNdx[i])  // If the index is less than the bit-reversed index.
+        swap(s[i], s[static_cast<size_t>(revNdx[i])]); // Swap the elements.             
 }                                       // End of the function.
     // ------------------------------------------------------------------------
     // LevinsonDurbin: Given autocorrelation r[0..p], solves for AR coefficients
-    //   r[0] a[0] + r[1] a[1] + … + r[p] a[p] = 0,    (Toeplitz system)
+    //   r[0] a[0] + r[1] a[1] + ? + r[p] a[p] = 0,    (Toeplitz system)
     //   returns (a[1..p], s²) where s² is the final prediction error.
-    //   “order” = p.  We assume r.size() >= p+1.
+    //   ?order? = p.  We assume r.size() >= p+1.
     // ------------------------------------------------------------------------
     
     inline std::pair<std::vector<T>, T>
     LevinsonDurbin(const std::vector<T>& r, int order) const
     {
-        // r: autocorrelation, r[0] … r[order]
+        // r: autocorrelation, r[0] ? r[order]
         // order: AR order (p)
         if ((int)r.size() < order+1) {
             throw std::invalid_argument{"LevinsonDurbin: need r.size() >= order+1"};
@@ -1479,10 +1477,10 @@ inline void  BitReversal(vector<std::complex<T>> &s, const int nBits)
     }
 
     // ------------------------------------------------------------------------
-    // AR_PSD: Given autocorrelation r[0..p], compute the “all-pole” PSD estimate
+    // AR_PSD: Given autocorrelation r[0..p], compute the ?all-pole? PSD estimate
     //    at fftsize uniformly spaced frequencies [0, 2p).  We solve AR(p) via
     //    Levinson-Durbin, then evaluate
-    //      H(w) = s² / |1 + a[1] e^{-jw} + … + a[p] e^{-j p w} |²
+    //      H(w) = s² / |1 + a[1] e^{-jw} + ? + a[p] e^{-j p w} |²
     //    at Nfft points, returning a vector<complex<T>> of length Nfft
     //    (you can take real(H) or abs(H)² as your PSD). 
     // ------------------------------------------------------------------------
@@ -1495,7 +1493,7 @@ inline void  BitReversal(vector<std::complex<T>> &s, const int nBits)
         }
         // 1) run Levinson-Durbin on r[0..order]
         auto [a, sigma2] = LevinsonDurbin(r, order);
-        // a = vector length p, contains a[1],…a[p], and sigma2 = error at final stage
+        // a = vector length p, contains a[1],?a[p], and sigma2 = error at final stage
 
         // 2) build PSD at fftsize freq bins
         std::vector<std::complex<T>> psd(fftsize);
@@ -2071,7 +2069,7 @@ inline vector<complex<T>> ZoomFFT (
 // lost information and there is no perfect inverse unless you zero-pad the missing bins first.
 // It returns the time-domain narrowband signal at the *decimated* rate fs_dec=fs/dec (baseband by default).
 // If 'upconvert' is true we heterodyne it back around f_center, but the sampling rate remains fs_dec, which
-// is intentionally "zoomed" and not suitable to represent a high RF at its original Nyquist—this is for
+// is intentionally "zoomed" and not suitable to represent a high RF at its original Nyquist?this is for
 // narrowband playback/analysis, not for reconstructing the original wideband record.
 inline vector<complex<T>> ZoomIFFT(
   const vector<complex<T>>& X_full_centered, // Full-length N, centered (fftshifted) baseband spectrum (NOT a slice).
@@ -2082,21 +2080,21 @@ inline vector<complex<T>> ZoomIFFT(
 {
   const size_t N=X_full_centered.size();
   if(N==0||fs<=0||f_span<=0)return {};
-  // Recompute decimation to match the forward path’s policy.
+  // Recompute decimation to match the forward path?s policy.
   int dec=static_cast<int>(std::floor(fs/(2.0*f_span)));if(dec<1)dec=1;
   const double fs_dec=fs/static_cast<double>(dec);
   // Undo the fftshift (centered?standard order), then IFFT to obtain baseband time-series y[m] at fs_dec.
-  // We implement unshift by the same helper (shift twice == rotate by N/2), but here we’ll just rotate back:
+  // We implement unshift by the same helper (shift twice == rotate by N/2), but here we?ll just rotate back:
   vector<complex<T>> X_unshift(N);
   const size_t h=N/2;
   for(size_t i=0;i<h;++i)X_unshift[i]=X_full_centered[i+h];
   for(size_t i=0;i<h;++i)X_unshift[i+h]=X_full_centered[i];
   vector<complex<T>> y=IFFTStride(X_unshift); // y at baseband, decimated rate
-  // Optional gentle synthesis window (mirror of analysis). For perfect recon you’d
+  // Optional gentle synthesis window (mirror of analysis). For perfect recon you?d
   // want to use the same window pair; in practice Hann is near-symmetric, so we often skip here.
   // If you want it, uncomment:
   // for(size_t m=0;m<N;++m){T win=static_cast<T>(0.5*(1.0-std::cos(2.0*M_PI*double(m)/double(N-1))));y[m]*=win;}
-  // Optional upconvert back near f_center (still at fs_dec). This is for “auditioning” the narrowband chunk.
+  // Optional upconvert back near f_center (still at fs_dec). This is for ?auditioning? the narrowband chunk.
   if(upconvert)
   {
     for(size_t m=0;m<N;++m)
@@ -2734,8 +2732,8 @@ inline vector<vector<complex<T>>> Sweep(
 // and we cap the instantaneous *frequency* to f_limit (Hz) to keep the chirp inside the audio band.
 // Notes on models:
 //  - Linear:        ?(t)=f0+a*t. This gives constant angular acceleration a (rad/s^2).
-//  - Exponential:   ?(t)=f0*exp(k*t). We choose k=a/max(f0,e) so that d?/dt|t=0˜a.
-//  - Hyperbolic:    ?(t)=K/(t+c). We choose c=Clamp(-f0/a,1.0e-9,1.0e9) so that ?(0)˜f0 and d?/dt|0˜a.
+//  - Exponential:   ?(t)=f0*exp(k*t). We choose k=a/max(f0,e) so that d?/dt|t=0?a.
+//  - Hyperbolic:    ?(t)=K/(t+c). We choose c=Clamp(-f0/a,1.0e-9,1.0e9) so that ?(0)?f0 and d?/dt|0?a.
 // In all cases, before integrating ? into f, we clamp ? to ±?_lim where ?_lim=2p*f_limit to respect the
 // requested audio limit. This means "up to a specified audio frequency" is always honored in the sweep.
 //
@@ -2761,10 +2759,10 @@ inline vector<complex<T>> GenerateChirp(
   const double Ts=1.0/fs;
   const double two_pi=2.0*M_PI;
   const double omega_lim=two_pi*std::abs(f_limit); // we clamp by magnitude
-  // Map a into each model's ?(t). For Exponential we choose k so that d?/dt|0˜a.
+  // Map a into each model's ?(t). For Exponential we choose k so that d?/dt|0?a.
   const double eps=1.0e-12;
   const double k_exp=(std::abs(omega0)>eps)?(alpha/std::abs(omega0)):0.0; // ?(t)=f0*exp(k*t)
-  // For hyperbolic, choose c so that ?(0)˜f0 and slope ~a; ?(t)=K/(t+c), K=f0*c.
+  // For hyperbolic, choose c so that ?(0)?f0 and slope ~a; ?(t)=K/(t+c), K=f0*c.
   double c_hyp;
   if(std::abs(alpha)>eps)c_hyp=Clamp(-omega0/alpha,1.0e-9,1.0e9); else c_hyp=1.0e6;
   const double K_hyp=omega0*c_hyp;
@@ -2840,7 +2838,7 @@ inline vector<T> GenerateRealChirp(
 //      w0=2pi*f0, a=2pi*(f1-f0)/T so that w(T)=2pi*f1. Classic constant angular acceleration sweep.
 //  * Exponential model (theta(t)=theta0*exp(k*t)):
 //      Choose k=ln(|theta1|/|theta0|)/T (magnitudes for robustness). Initial slope is dtheta/dt|0=k*theta0,
-//      so we pass a=w0*k. This makes GenerateChirp’s exponential branch reproduce the intended curve.
+//      so we pass a=w0*k. This makes GenerateChirp?s exponential branch reproduce the intended curve.
 //  * Hyperbolic model (w(t)=K/(t+c)):
 //      Enforce w(0)=w0 and w(T)=w1 ? c=T*w1/(w0-w1) (guards below handle degeneracies).
 //      Initial slope dw/dt|0=-(f0/c), so we pass a=-f0/c; GenerateChirp reconstructs c via c-f0/a.
@@ -2919,7 +2917,7 @@ inline vector<complex<T>> MakeChirp(
         // Keep c positive and reasonable to avoid 1/(t+c) singularities near t=0.
         if(c<1.0e-9)c=1.0e-9;
       }
-      alpha=-omega0/c; // so GenerateChirp can reconstruct c˜-f0/a internally
+      alpha=-omega0/c; // so GenerateChirp can reconstruct c?-f0/a internally
     }break;
 
     default:
@@ -3095,7 +3093,7 @@ private:
     // -------------------------------- //
      T delta = T(0);
      if (std::isfinite(denom) && std::abs(denom) > static_cast<T>(1e-20))
-       delta = static_cast<T>(0.5)*(alpha - gamma)/denom; // (-0.5…0.5) ideally
+       delta = static_cast<T>(0.5)*(alpha - gamma)/denom; // (-0.5?0.5) ideally
      if (!std::isfinite(delta)) delta = T(0);
      // Clamp to a sane range
      if (delta < T(-0.5)) delta = T(-0.5);
