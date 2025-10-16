@@ -9,8 +9,6 @@
  * * Author:
  * *  JEP J. Enrique Peraza
  * *
- * * Organization:
- * *   Trivium Solutions LLC, 9175 Guilford Rd, Suite 220, Columbia, MD 21046
  * *
  */
 #pragma once
