@@ -14,6 +14,8 @@
 * * Author:
 * *  JEP, J. Enrique Peraza
 * *
+* * Organization:
+* *  Trivium Solutions LLC, 9175 Guilford Rd, Suite 220, Columbia, MD 21046
 * *
  */
 #pragma once
@@ -98,6 +100,8 @@ namespace sdr::mdm
     public:
       RS255223 (void)                   // Constructor
       {
+        // Initialize logger first so it's available for any early logging
+        lg=logx::Logger::NewLogger();   // Create new logger instance
         Assemble();                     // Assemble generator polynomial
         sto=new RSStatus();             // Create status object
     // Note: Logging writes to stdout and to /home/ljt/Projects/SDR/src/logs/log.txt
@@ -109,6 +113,11 @@ namespace sdr::mdm
           delete sto;                   // Delete status object
           sto=nullptr;                  // Remember we deleted it
         }                               // Done deleting status object
+        if (lg)                         // If logger initialized
+        {                  
+          lg->Shutdown();               // Gracefully shutdown logger
+          lg.reset();                   // Release resource
+        }
       }
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
       // Assemble generator polynomial G(x)
@@ -129,14 +138,14 @@ namespace sdr::mdm
         }                               // Done assembling generator polynomial
 
         {
-          char buf[1024]; int off=0;
-          off += std::snprintf(buf+off,sizeof(buf)-off,"RS Assemble: gen[0..32]=");
-          for (int i=0;i<=32;i++) {
-            off += std::snprintf(buf+off,sizeof(buf)-off,"%s%02X", (i==0?"":" "), gen[i]);
-          }
-          RSLogf("%s", buf);
+          char buf[1024];
+          int off=0;
+          off+=std::snprintf(buf+off,sizeof(buf)-off,"RS Assemble: gen[0..32]=");
+          for (int i=0;i<=32;i++)
+            off+=std::snprintf(buf+off,sizeof(buf)-off,"%s%02X",(i==0?"":" "),gen[i]);
+          if (lg)
+            lg->Inf("%s",buf);
         }
-
       }                                 // ~~~~~~~~~ Assemble ~~~~~~~~~~ //
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
       // Encode data bytes into RS(255,223) codeword
@@ -180,20 +189,26 @@ namespace sdr::mdm
         for (int32_t j=0;j<32;j++)      // For each parity byte
           (*o)[k+j]=p[31-j];            // Append parity bytes in reverse order
 
-        RSLogf("RS Encode: k=%d n=%d", (int)k, (int)(k+32));
+        if (lg)
+          lg->Inf("RS Encode: k=%d n=%d",static_cast<int>(k),static_cast<int>(k+32));
         {
-          char buf[512]; int off=0;
-          off += std::snprintf(buf+off,sizeof(buf)-off," cw[0..7]=");
-          for (int i=0;i<8 && i<k+32;i++) off+=std::snprintf(buf+off,sizeof(buf)-off," %02X", (*o)[i]);
-          RSLogf("%s", buf);
+          char buf[512];                
+          int off=0;
+          off+=std::snprintf(buf+off,sizeof(buf)-off," cw[0..7]=");
+          for (int i=0;i<8 && i<k+32;i++)
+            off+=std::snprintf(buf+off,sizeof(buf)-off," %02X", (*o)[i]);
+          if (lg)
+            lg->Inf("%s", buf);
         }
         {
-          char buf[512]; int off=0;
-          off += std::snprintf(buf+off,sizeof(buf)-off," cw[%d..%d]=", (int)(k+32-8), (int)(k+32-1));
-          for (int i=(int)k+24;i<(int)k+32;i++) off+=std::snprintf(buf+off,sizeof(buf)-off," %02X", (*o)[i]);
-          RSLogf("%s", buf);
+          char buf[512];
+          int off=0;
+          off+=std::snprintf(buf+off,sizeof(buf)-off," cw[%d..%d]=", (int)(k+32-8), (int)(k+32-1));
+          for (int i=static_cast<int>(k)+24;i<static_cast<int>(k)+32;i++)
+            off+=std::snprintf(buf+off,sizeof(buf)-off," %02X", (*o)[i]);
+          if (lg)
+            lg->Inf("%s", buf);
         }
-
         delete[] p;                     // Free parity bytes buffer
         p=nullptr;                      // Remember we deleted it.
       }                                 // ~~~~~~~~~~ Encode ~~~~~~~~~~ //
@@ -227,19 +242,21 @@ namespace sdr::mdm
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // Sanity checks
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        RSLogf("RS Decode: begin");     // Log decode start
+        if (lg) lg->Inf("RS Decode: begin");     // Log decode start
         {                               // Log codeword snippets
           char buf[512];                // Buffer for logging
           int off=0;                    // Offset into buffer
           off+=std::snprintf(buf+off,sizeof(buf)-off," code[0..7]=");
           for (int i=0;i<8;i++)         // First 8 bytes
             off+=std::snprintf(buf+off,sizeof(buf)-off," %02X",code[i]);
-          RSLogf("%s",buf);             // Log it
+          if (lg)
+            lg->Inf("%s",buf);         
         }                               
         {                               // Log codeword snippets
           char buf[256];                // Buffer for logging
           std::snprintf(buf,sizeof(buf)," code[223..224]= %02X %02X",code[223],code[224]);
-          RSLogf("%s",buf);             // Log it
+          if (lg)
+            lg->Inf("%s",buf);             
         }
         {
           char buf[512];                // Buffer for logging
@@ -247,7 +264,8 @@ namespace sdr::mdm
           off+=std::snprintf(buf+off,sizeof(buf)-off," code[247..254]=");
           for (int i=247;i<255;i++)
             off+=std::snprintf(buf+off,sizeof(buf)-off," %02X",code[i]);
-          RSLogf("%s",buf);
+          if (lg)
+            lg->Inf("%s",buf);
         }    
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // 0) Build polynomial C(x): degrees 0..254 (low..high).
@@ -298,7 +316,8 @@ namespace sdr::mdm
             break;                      // No need to continue checking
           }                             // Done checking this byte
         }                               // Done checking all parity bytes
-        RSLogf(" RS Decode: parity match=%d",pmat);
+        if (lg)
+          lg->Inf(" RS Decode: parity match=%d",pmat);
         if (pmat==-1)                   // Parity matches?
         {                               // Yes, no errors
           sto->corr=0;                  // No corrections needed.
@@ -310,32 +329,43 @@ namespace sdr::mdm
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // Sanity check
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        RSLogf(" RS Decode: proceed to decode");
+        if (lg)
+          lg->Inf(" RS Decode: proceed to decode");
         {
           char buf[512];                
           int off=0;
           off+=std::snprintf(buf+off,sizeof(buf)-off," RS cw[0..7]=");
           for (int i=0;i<8;i++)
             off+=std::snprintf(buf+off,sizeof(buf)-off," %02X",cw[(size_t)i]);
-          RSLogf("%s", buf);
+          if (lg)
+            lg->Inf("%s",buf);
         }
         {
-          char buf[512]; int off=0;
-          off += std::snprintf(buf+off,sizeof(buf)-off," RS cw[24..31]=");
-          for (int i=24;i<32;i++) off+=std::snprintf(buf+off,sizeof(buf)-off," %02X", cw[(size_t)i]);
-          RSLogf("%s", buf);
+          char buf[512];
+          int off=0;
+          off+=std::snprintf(buf+off,sizeof(buf)-off," RS cw[24..31]=");
+          for (int i=24;i<32;i++)
+            off+=std::snprintf(buf+off,sizeof(buf)-off," %02X", cw[(size_t)i]);
+          if (lg)
+            lg->Inf("%s",buf);
         }
         {
-          char buf[512]; int off=0;
-          off += std::snprintf(buf+off,sizeof(buf)-off," RS cw[32..39]=");
-          for (int i=32;i<40;i++) off+=std::snprintf(buf+off,sizeof(buf)-off," %02X", cw[(size_t)i]);
-          RSLogf("%s", buf);
+          char buf[512];
+          int off=0;
+          off+=std::snprintf(buf+off,sizeof(buf)-off," RS cw[32..39]=");
+          for (int i=32;i<40;i++)
+            off+=std::snprintf(buf+off,sizeof(buf)-off," %02X", cw[(size_t)i]);
+          if (lg)
+            lg->Inf("%s", buf);
         }
         {
-          char buf[512]; int off=0;
-          off += std::snprintf(buf+off,sizeof(buf)-off," RS cw[247..254]=");
-          for (int i=247;i<255;i++) off+=std::snprintf(buf+off,sizeof(buf)-off," %02X", cw[(size_t)i]);
-          RSLogf("%s", buf);
+          char buf[512];
+          int off=0;
+          off+=std::snprintf(buf+off,sizeof(buf)-off," RS cw[247..254]=");
+          for (int i=247;i<255;i++)
+            off+=std::snprintf(buf+off,sizeof(buf)-off," %02X", cw[(size_t)i]);
+          if (lg)
+            lg->Inf("%s", buf);
         }
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // Begin decode process, compute syndromes:
@@ -364,7 +394,8 @@ namespace sdr::mdm
           off+=std::snprintf(buf+off,sizeof(buf)-off," RS Syndromes S[0..31]=");
           for (int i=0;i<32;i++)
             off+=std::snprintf(buf+off,sizeof(buf)-off," %02X",S[i]);
-          RSLogf("%s",buf);
+          if (lg)
+            lg->Inf("%s",buf);
         }
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // (1a) Check for all-zero syndromes -> no errors
@@ -400,8 +431,8 @@ namespace sdr::mdm
               d^=gf.Multiply(C[i],S[n-i]);// Yes, update discrepancy....
           if (d==0)                     // Any discrepancy?
           {                             // No
-             ++m;                       // Just increment m
-             continue;                  // Skip this syndrome
+            ++m;                        // Just increment m
+            continue;                   // Skip this syndrome
           }                             // Done with zero discrepancy....
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
           // If we got here, there was a discrepancy d ... so we compute new error locator
@@ -443,7 +474,8 @@ namespace sdr::mdm
           off+=std::snprintf(buf+off,sizeof(buf)-off," RS BM: L=%d C[0..%d]=",L,L);
           for (int i=0;i<=L;i++)        // For each coefficient
             off+=std::snprintf(buf+off,sizeof(buf)-off," %02X",C[i]);
-          RSLogf("%s",buf);             // Log it
+          if (lg)
+            lg->Inf("%s",buf);
         }                               // Done sanity check
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // Check L for validity
@@ -483,11 +515,13 @@ namespace sdr::mdm
             // ~~~~~~~~~~~~~~~~~~~~~~~~ //
             iroot[ne]=i;                // Save the root index
             pos[ne]=(255-i)%255;        // Save the coefficient position
-            RSLogf(" RS Chien: root i=%3d -> coeff_index(pos)=%3d (x=α^{%d})",i,pos[ne],i);
+            if (lg)
+              lg->Inf(" RS Chien: root i=%3d -> coeff_index(pos)=%3d (x=α^{%d})",i,pos[ne],i);
             ++ne;                       // Increment number of roots found
           }                             // Done processing this possible root
         }                               // Done searching for roots
-        RSLogf(" RS Chien: L=%d ne=%d",L,ne);// Log number of roots found
+        if (lg)
+          lg->Inf(" RS Chien: L=%d ne=%d",L,ne);
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // Check ne for validity
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -537,7 +571,8 @@ namespace sdr::mdm
           }                             // Done computing derivative
           if (d==0)                     // Derivative is zero?
           {                             // Yes, skip this error
-            RSLogf(" RS Forney[%d]: skipped, derivative=0 i=%d j=%d",k,i,j);
+            if (lg)
+              lg->Inf(" RS Forney[%d]: skipped, derivative=0 i=%d j=%d",k,i,j);
             continue;                   // Skip this error
           }                             // Proceed with non-zero derivative
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -555,7 +590,7 @@ namespace sdr::mdm
           const uint8_t emag=gf.Multiply(omx,gf.Inverse(d));// Magnitude of the error
           const uint8_t bef=cw[static_cast<size_t>(j)];// Before codeword
           cw[static_cast<size_t>(j)]^=emag;// Our code word
-          RSLogf(" RS Forney[%d]: i=%3d j=%3d Xinv=α^{%3d} (0x%02X) d=0x%02X omx=0x%02X emag=0x%02X cw_before=0x%02X cw_after=0x%02X",
+          if (lg) lg->Inf(" RS Forney[%d]: i=%3d j=%3d Xinv=α^{%3d} (0x%02X) d=0x%02X omx=0x%02X emag=0x%02X cw_before=0x%02X cw_after=0x%02X",
             k,i,j,i,Xinv,d,omx,emag,bef,cw[static_cast<size_t>(j)]);
         }                               // Done processing all errors
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -570,7 +605,8 @@ namespace sdr::mdm
             acc = gf.Add(gf.Multiply(acc,a),cw[static_cast<size_t>(j)]);// Horner evaluation
           vld&=(acc==0);                // Valid if all recomputed syndromes are zero
         }                               // Done recomputing all syndromes
-        RSLogf(" RS Verify: val=%d corr=%d", static_cast<int>(vld),ne);
+        if (lg)
+          lg->Inf(" RS Verify: val=%d corr=%d", static_cast<int>(vld),ne);
         if (vld)                        // Valid codeword after corrections?
         {                               // Yes, successful decode
           sto->corr=ne;                 // Number of corrections
@@ -616,30 +652,8 @@ namespace sdr::mdm
       GF256 gf;                         // GF(256) arithmetic tables
       RSStatus* sto{nullptr};           // Status object
       std::vector<uint8_t> gen;         // Generator polynomial coefficients
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Lazy log function: writes to stdout and to the canonical log file
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      static inline void RSLogf (
-        const char* fmt, ...)           // Format string
-      {                                 // ~~~~~~~~~~ RSLogf ~~~~~~~~~~ //
-        char buf[2048];                 // Buffer for formatted log message
-        va_list ap;                     // Argument list
-        va_start(ap,fmt);               // Start varargs
-        vsnprintf(buf,sizeof(buf),fmt,ap);// Format message
-        va_end(ap);                     // End varargs
-        std::fprintf(stdout,"%s\n",buf);// Write to stdout
-        std::fflush(stdout);            // Flush stdout
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    // The log file path is hardcoded here for simplicity
-    // because I am too lazy to wire in the log object.
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        const char* path="/home/enriperaza/Projects/SDR/src/logs/log.txt";// Log file path
-        if (FILE* fp=std::fopen(path,"a"))// Open log file for append
-        {                               // Write to log file
-          std::fprintf(fp,"%s\n",buf);  // Write log message
-          std::fclose(fp);              // Close log file
-        }                               // Done with log file
-      }                                 // ~~~~~~~~~~ RSLogf ~~~~~~~~~~ //
+      // Logger for this component
+      std::unique_ptr<logx::Logger> lg{};
 
   };
 }
