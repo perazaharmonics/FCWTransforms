@@ -4,7 +4,7 @@
  * * Description:
  * * This file contains the implementation of a delay line class.
  * * The delay line is implemented as a circular buffer.
- * * It is used to delay the audio signal by a specified number of samples.
+ * * It is used to delay the signal being processed by a specified number of samples.
  * * Maxlen is the compile time length in samples of the delay line.
  * * Author:
  * *  JEP J. Enrique Peraza
