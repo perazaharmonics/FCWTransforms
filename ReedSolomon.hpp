@@ -22,7 +22,7 @@
 #include <cstring>
 #include <cstdarg>
 #include <cstdio>
-#include "logger/Logger.h"
+#include "../logger/Logger.h"
 
 
 namespace sdr::mdm
@@ -271,24 +271,25 @@ namespace sdr::mdm
         // Data:   degrees 32..254, ***REVERSED*** so the first data byte is the highest degree.
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         std::vector<uint8_t> cw(255);
+        // Layout convention for Horner evaluation:
+        // We store coefficient for degree d at index idx = 254 - d, so that
+        // Horner acc = acc*a + cw[idx] computes sum coeff[d] * a^d.
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // Parity (the encoder appends p[31-j], which matches r_j here)
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        for (int j=0;j<32;++j)         // For each parity byte
-          cw[static_cast<size_t>(j)]=code[223+j];// Assign parity bytes directly
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // Data — ***reverse into degrees*** 32..254
-        // code[0]  -> degree 254
-        // code[1]  -> degree 253
-        // ...
-        // code[222]-> degree 32
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+        // Data: degrees d=32..254 come from code[0..222] where
+        // code[0] is degree 254, code[222] is degree 32.
+        // With idx = 254 - d, this maps to cw[i] = code[i] for i=0..222.
         for (int i=0;i<223;++i)         // For each data byte
-          cw[static_cast<size_t>((32+i))]=code[i];
+          cw[static_cast<size_t>(i)]=code[i];
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+        // Parity: degrees d=0..31 are r_d and appear in code as r_0..r_31 at
+        // code[223 + d]. Using idx = 254 - d, place at cw[254 - d].
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+        for (int j=0;j<32;++j)
+          cw[static_cast<size_t>(254-j)]=code[223+j];
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // Clean codeword check using the encoder LFSR (authoritative)
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        const uint8_t* dat=cw.data()+32;// Data region of our layout
+        const uint8_t* dat=cw.data();   // Data region (original order) at cw[0..222]
         uint8_t pcalc[32];              // Parity bit calculations here
         std::memset(pcalc,0,32);        // Zeroize our parity array
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -306,9 +307,9 @@ namespace sdr::mdm
         //  against received parity cw[0..31]
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         int pmat=-1;                    // Assume no match
-        for (int j=0;j<32;++j)          // For each parity byte
-        {                               // Check for match
-          if (cw[static_cast<size_t>(j)]!=pcalc[31-j]) // Mismatch?
+        for (int j=0;j<32;++j)          // For each parity byte degree j
+        {                               // Check for match against computed remainder r_j
+          if (cw[static_cast<size_t>(254 - j)]!=pcalc[31-j]) // Mismatch?
           {                             // Yes
             pmat=j;                     // Mark parity mismatch
             break;                      // No need to continue checking
@@ -367,7 +368,7 @@ namespace sdr::mdm
         }
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // Begin decode process, compute syndromes:
-        // (1) Syndromes S_i = C(α^{i+1}), i=0..31
+        // (1) Syndromes S_i = C(a^{i+1}), i=0..31
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         uint8_t S[32];                  // Our syndromes s_i{0..31}
         bool azer=true;                 // Assume all zero syndromes
@@ -378,8 +379,8 @@ namespace sdr::mdm
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
           // Evaluate C(a) using Horner's method
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-          for (int j=254;j>=0;--j)      // For each coefficient in C(x).... Horner compute it
-            acc=gf.Add(gf.Multiply(acc,a),cw[(size_t)j]);// Horner evaluation
+          for (int j=0;j<=254;++j)      // For each coefficient degree from high to low
+            acc=gf.Add(gf.Multiply(acc,a),cw[(size_t)j]);// Horner evaluation, cw[j]=coef of degree (254-j)
           S[i]=acc;                     // Store syndrome
           azer&=(acc==0);               // Determine if still all zero syndromes...
         }                               // Done computing all syndromes....
@@ -407,7 +408,7 @@ namespace sdr::mdm
           return *sto;                  // Return status output
         }                               // Done with no errors.... Proceed to error correction....
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // (2) Berlekamp–Massey: Λ(x)
+        // (2) Berlekamp-Massey: LAMBDA(x)
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         uint8_t C[33];                  // Error locator polynomial
         uint8_t B[33];                  // Previous C(x)
@@ -485,7 +486,7 @@ namespace sdr::mdm
           return *sto;                  // Return status output
         }                               // Proceed with L valid
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // (3) Chien: find roots of Λ(α^i), i=0..254
+        // (3) Chien: find roots of ?(a^i), i=0..254
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         int ne=0;                       // Number of roots found
         int iroot[32];                  // Root indices
@@ -514,7 +515,7 @@ namespace sdr::mdm
             iroot[ne]=i;                // Save the root index
             pos[ne]=(255-i)%255;        // Save the coefficient position
             if (lg)
-              lg->Inf(" RS Chien: root i=%3d -> coeff_index(pos)=%3d (x=α^{%d})",i,pos[ne],i);
+              lg->Inf(" RS Chien: root i=%3d -> coeff_index(pos)=%3d (x=a^{%d})",i,pos[ne],i);
             ++ne;                       // Increment number of roots found
           }                             // Done processing this possible root
         }                               // Done searching for roots
@@ -533,7 +534,7 @@ namespace sdr::mdm
         // optional: enforce ne==L
         // if (ne != L) { sto->corr = 0; sto->ok = false; return *sto; }
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // (4) Ω(x) = [ S(x) * Λ(x) ] mod x^{32}
+        // (4) O(x) = [ S(x) * ?(x) ] mod x^{32}
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         uint8_t om[32];                 // Omega polynomial
         std::memset(om,0,32);           // Clear Omega
@@ -559,7 +560,7 @@ namespace sdr::mdm
           const int j=pos[k];           // coefficient index in cw()
           const uint8_t Xinv=gf.alog[i];// X_inv=a^{i}
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-          // Λ'(X^{-1})
+          // ?'(X^{-1})
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
           uint8_t d=0;                  // Derivative of error locator polynomial
           for (int t=1;t<=L;t+=2)       // For each odd term in C(x)
@@ -574,7 +575,7 @@ namespace sdr::mdm
             continue;                   // Skip this error
           }                             // Proceed with non-zero derivative
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-          // Ω(X^{-1})
+          // O(X^{-1})
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
           uint8_t omx=0;                // Omega evaluated at X^{-1}
           for (int t=0;t<32;++t)        // For each term in Omega
@@ -583,12 +584,12 @@ namespace sdr::mdm
               omx^=gf.Multiply(om[t],gf.Power(Xinv,t));// Yes, update Omega(X^{-1})
           }                             // Done computing Omega(X^{-1})
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-          // Error magnitude: em = Ω(X^{-1}) / Λ'(X^{-1})
+          // Error magnitude: em = O(X^{-1}) / ?'(X^{-1})
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
           const uint8_t emag=gf.Multiply(omx,gf.Inverse(d));// Magnitude of the error
           const uint8_t bef=cw[static_cast<size_t>(j)];// Before codeword
           cw[static_cast<size_t>(j)]^=emag;// Our code word
-          if (lg) lg->Inf(" RS Forney[%d]: i=%3d j=%3d Xinv=α^{%3d} (0x%02X) d=0x%02X omx=0x%02X emag=0x%02X cw_before=0x%02X cw_after=0x%02X",
+          if (lg) lg->Inf(" RS Forney[%d]: i=%3d j=%3d Xinv=a^{%3d} (0x%02X) d=0x%02X omx=0x%02X emag=0x%02X cw_before=0x%02X cw_after=0x%02X",
             k,i,j,i,Xinv,d,omx,emag,bef,cw[static_cast<size_t>(j)]);
         }                               // Done processing all errors
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -599,8 +600,8 @@ namespace sdr::mdm
         {                               // Recompute S[i]=C(alpha^{i+1})
           const uint8_t a=gf.alog[i+1]; // a = alpha^{i+1}
           uint8_t acc=0;                // Accumulator for syndrome computation
-          for (int j=254;j>=0;--j)      // For each coefficient in C(x).... Horner compute it
-            acc = gf.Add(gf.Multiply(acc,a),cw[static_cast<size_t>(j)]);// Horner evaluation
+          for (int j=0;j<=254;++j)      // For each coefficient degree from high to low
+            acc = gf.Add(gf.Multiply(acc,a),cw[static_cast<size_t>(j)]);// Horner evaluation, cw[j]=coef of degree (254-j)
           vld&=(acc==0);                // Valid if all recomputed syndromes are zero
         }                               // Done recomputing all syndromes
         if (lg)
