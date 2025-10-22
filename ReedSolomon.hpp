@@ -22,6 +22,7 @@
 #include <cstring>
 #include <cstdarg>
 #include <cstdio>
+#include <memory>
 #include "../logger/Logger.h"
 
 
@@ -267,38 +268,40 @@ namespace sdr::mdm
         }    
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // 0) Build polynomial C(x): degrees 0..254 (low..high).
-        // Parity: degrees 0..31, in natural remainder order r_0..r_31.
-        // Data:   degrees 32..254, ***REVERSED*** so the first data byte is the highest degree.
+        // Parity:  cw[0..31] = r_0..r_31 (degrees 0..31, parity coefficients)
+        // Data:   cw[32..254] = data bytes (degrees 32...254), code[i]->cw[32+i]
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         std::vector<uint8_t> cw(255);
+        for (int j=0;j<32;++j)          // For each parity byte
+        {
+          cw[static_cast<size_t>(j)]=code[223+j];
+          if (lg!=nullptr)
+            lg->Inf(" RS Decode: cw[%d]=parity code[%d]=%02X",j,223+j,code[223+j]);
+        }
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // Layout convention for Horner evaluation:
         // We store coefficient for degree d at index idx = 254 - d, so that
         // Horner acc = acc*a + cw[idx] computes sum coeff[d] * a^d.
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // Data: degrees d=32..254 come from code[0..222] where
-        // code[0] is degree 254, code[222] is degree 32.
-        // With idx = 254 - d, this maps to cw[i] = code[i] for i=0..222.
-        for (int i=0;i<223;++i)         // For each data byte
-          cw[static_cast<size_t>(i)]=code[i];
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // Parity: degrees d=0..31 are r_d and appear in code as r_0..r_31 at
-        // code[223 + d]. Using idx = 254 - d, place at cw[254 - d].
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        for (int j=0;j<32;++j)
-          cw[static_cast<size_t>(254-j)]=code[223+j];
+        for (int i=0;i<223;++i)         // For each data byte...
+        {
+          cw[static_cast<size_t>(32+i)]=code[i]; // Copy data byte
+          if (lg!=nullptr)
+            lg->Inf(" RS Decode: cw[%d]=data code[%d]=%02X",32+i,i,code[i]);
+        }
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // Clean codeword check using the encoder LFSR (authoritative)
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        const uint8_t* dat=cw.data();   // Data region (original order) at cw[0..222]
+        const uint8_t* dat=cw.data()+32;// Data region lives at cw[32..254]
         uint8_t pcalc[32];              // Parity bit calculations here
         std::memset(pcalc,0,32);        // Zeroize our parity array
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // Re-run the encoded LFSR over 223 data byes
+        // Re-run the encoded LFSR over 223 data bytes
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         for (int i=0;i<223;++i)         // For our data's length
         {                               // Re-run LFSR encoder
           uint8_t fb=dat[i]^pcalc[0];   // Compute feedback byte
-          for (int32_t q=0;q<31;q++)    // Shift 0..30 using q+1
+          for (int32_t q=0;q<31;++q)    // Shift 0..30 using q+1
             pcalc[q]=pcalc[q+1]^gf.Multiply(fb,gen[q+1]);// Shift and update
           pcalc[31]=gf.Multiply(fb,gen[32]);// Last parity byte
         }
@@ -309,14 +312,17 @@ namespace sdr::mdm
         int pmat=-1;                    // Assume no match
         for (int j=0;j<32;++j)          // For each parity byte degree j
         {                               // Check for match against computed remainder r_j
-          if (cw[static_cast<size_t>(254 - j)]!=pcalc[31-j]) // Mismatch?
+          if (cw[static_cast<size_t>(j)]!=pcalc[31-j]) // Mismatch?
           {                             // Yes
             pmat=j;                     // Mark parity mismatch
             break;                      // No need to continue checking
           }                             // Done checking this byte
         }                               // Done checking all parity bytes
-        if (lg)
-          lg->Inf(" RS Decode: parity match=%d",pmat);
+        if (lg)                         // Sanity check logging
+        {
+          lg->Inf("RS Decode: parity %s%s",
+          (pmat==-1?"OK":"mismatch"),(pmat==-1?"":(std::string(" at r_")+std::to_string(pmat)).c_str()));
+        }
         if (pmat==-1)                   // Parity matches?
         {                               // Yes, no errors
           sto->corr=0;                  // No corrections needed.
@@ -329,43 +335,7 @@ namespace sdr::mdm
         // Sanity check
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         if (lg)
-          lg->Inf(" RS Decode: proceed to decode");
-        {
-          char buf[512];                
-          int off=0;
-          off+=std::snprintf(buf+off,sizeof(buf)-off," RS cw[0..7]=");
-          for (int i=0;i<8;i++)
-            off+=std::snprintf(buf+off,sizeof(buf)-off," %02X",cw[(size_t)i]);
-          if (lg)
-            lg->Inf("%s",buf);
-        }
-        {
-          char buf[512];
-          int off=0;
-          off+=std::snprintf(buf+off,sizeof(buf)-off," RS cw[24..31]=");
-          for (int i=24;i<32;i++)
-            off+=std::snprintf(buf+off,sizeof(buf)-off," %02X", cw[(size_t)i]);
-          if (lg)
-            lg->Inf("%s",buf);
-        }
-        {
-          char buf[512];
-          int off=0;
-          off+=std::snprintf(buf+off,sizeof(buf)-off," RS cw[32..39]=");
-          for (int i=32;i<40;i++)
-            off+=std::snprintf(buf+off,sizeof(buf)-off," %02X", cw[(size_t)i]);
-          if (lg)
-            lg->Inf("%s", buf);
-        }
-        {
-          char buf[512];
-          int off=0;
-          off+=std::snprintf(buf+off,sizeof(buf)-off," RS cw[247..254]=");
-          for (int i=247;i<255;i++)
-            off+=std::snprintf(buf+off,sizeof(buf)-off," %02X", cw[(size_t)i]);
-          if (lg)
-            lg->Inf("%s", buf);
-        }
+          lg->Inf(" RS Decode: proceed to error correction");
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // Begin decode process, compute syndromes:
         // (1) Syndromes S_i = C(a^{i+1}), i=0..31
@@ -379,23 +349,13 @@ namespace sdr::mdm
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
           // Evaluate C(a) using Horner's method
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-          for (int j=0;j<=254;++j)      // For each coefficient degree from high to low
-            acc=gf.Add(gf.Multiply(acc,a),cw[(size_t)j]);// Horner evaluation, cw[j]=coef of degree (254-j)
+          for (int j=254;j>=0;--j)      // For each coefficient degree from high to low
+            acc=gf.Add(gf.Multiply(acc,a),cw[(size_t)j]);// Horner evaluation, cw[j]=coef of degree j
           S[i]=acc;                     // Store syndrome
           azer&=(acc==0);               // Determine if still all zero syndromes...
-        }                               // Done computing all syndromes....
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // Sanity check
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //      
-        {
-          char buf[1024];               // Buffer for logging
-          int off=0;
-          off+=std::snprintf(buf+off,sizeof(buf)-off," RS Syndromes S[0..31]=");
-          for (int i=0;i<32;i++)
-            off+=std::snprintf(buf+off,sizeof(buf)-off," %02X",S[i]);
           if (lg)
-            lg->Inf("%s",buf);
-        }
+            lg->Deb(" RS Decode: S[%d]=%02X",i,acc);
+        }                               // Done computing all syndromes....
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // (1a) Check for all-zero syndromes -> no errors
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -589,8 +549,11 @@ namespace sdr::mdm
           const uint8_t emag=gf.Multiply(omx,gf.Inverse(d));// Magnitude of the error
           const uint8_t bef=cw[static_cast<size_t>(j)];// Before codeword
           cw[static_cast<size_t>(j)]^=emag;// Our code word
-          if (lg) lg->Inf(" RS Forney[%d]: i=%3d j=%3d Xinv=a^{%3d} (0x%02X) d=0x%02X omx=0x%02X emag=0x%02X cw_before=0x%02X cw_after=0x%02X",
-            k,i,j,i,Xinv,d,omx,emag,bef,cw[static_cast<size_t>(j)]);
+          if (lg)
+          {
+            lg->Inf(" RS Forney[%d]: i=%3d j=%3d Xinv=a^{%3d} (0x%02X) d=0x%02X omx=0x%02X emag=0x%02X cw_before=0x%02X cw_after=0x%02X",
+              k,i,j,i,Xinv,d,omx,emag,bef,cw[static_cast<size_t>(j)]);            
+          }
         }                               // Done processing all errors
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // (6) Verify: recompute syndromes
@@ -600,8 +563,8 @@ namespace sdr::mdm
         {                               // Recompute S[i]=C(alpha^{i+1})
           const uint8_t a=gf.alog[i+1]; // a = alpha^{i+1}
           uint8_t acc=0;                // Accumulator for syndrome computation
-          for (int j=0;j<=254;++j)      // For each coefficient degree from high to low
-            acc = gf.Add(gf.Multiply(acc,a),cw[static_cast<size_t>(j)]);// Horner evaluation, cw[j]=coef of degree (254-j)
+          for (int j=254;j>=0;--j)      // For each coefficient degree from high to low
+            acc=gf.Add(gf.Multiply(acc,a),cw[static_cast<size_t>(j)]);// Horner evaluation, cw[j]=coef of degree (254-j)
           vld&=(acc==0);                // Valid if all recomputed syndromes are zero
         }                               // Done recomputing all syndromes
         if (lg)
