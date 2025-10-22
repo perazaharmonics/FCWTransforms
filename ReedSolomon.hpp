@@ -518,7 +518,7 @@ namespace sdr::mdm
         {                               // Compute error magnitude and location
           const int i=iroot[k];         // alpha^i was a root
           const int j=pos[k];           // coefficient index in cw()
-          const uint8_t Xinv=gf.alog[i];// X_inv=a^{i}
+          const uint8_t Xinv=gf.alog[(255-i)%255];// X_inv=a^{i}
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
           // ?'(X^{-1})
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -531,7 +531,8 @@ namespace sdr::mdm
           if (d==0)                     // Derivative is zero?
           {                             // Yes, skip this error
             if (lg)
-              lg->Inf(" RS Forney[%d]: skipped, derivative=0 i=%d j=%d",k,i,j);
+              lg->Inf(" RS Forney[%d]: i=%3d j=%3d Xinv=a^{%3d} (0x%02X) d=0x%02X SKIP",
+                k,i,j,i,Xinv,d);
             continue;                   // Skip this error
           }                             // Proceed with non-zero derivative
           // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
