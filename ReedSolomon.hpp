@@ -576,7 +576,7 @@ namespace sdr::mdm
         }                               // Done recomputing all syndromes
         if (lg)
           lg->Inf(" RS Verify: val=%d ne=%d", static_cast<int>(vld),ne);
-        if (vld==0)                        // Valid codeword after corrections?
+        if (vld)                        // Valid codeword after corrections?
         {                               // Yes, successful decode
           sto->corr=ne;                 // Number of corrections
           sto->ok=true;                 // Decode successful
