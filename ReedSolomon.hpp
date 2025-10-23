@@ -206,7 +206,7 @@ namespace sdr::mdm
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
     inline void EncodeVec (
       const std::vector<uint8_t>* dat, // Input codeword
-      std::vector<uint8_t>*const o)    // Corrected symbols buffer
+      std::vector<uint8_t>* const o)    // Corrected symbols buffer
     {                                  // ~~~~~~~~~~ EncodeVec ~~~~~~~~~~ //
       if (dat==nullptr||o==nullptr)    // Bad args?
         return;                        // Yes, nothing to do. Return.
