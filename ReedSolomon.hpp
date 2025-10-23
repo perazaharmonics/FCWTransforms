@@ -156,7 +156,7 @@ namespace sdr::mdm
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
     inline void Encode (
       const uint8_t* const dat,        // data to encode
-      int32_t k,                       // Data length
+      int32_t k,                       // Data offset
       std::vector<uint8_t>* const o)   // Output code word
     {                                  // ~~~~~~~~~~ Encode ~~~~~~~~~~ //
       if (dat==nullptr||o==nullptr)    // Bad args?
