@@ -5,7 +5,7 @@
 * * Description:
 * *   CCSDS Reed-Solomon error correction encoder/decoder for RS(255,223) with
 * *   support for both encoding and decoding operations. , t=16 over GF(256) with
-* *   generator polynomial: G(x)= x^8 +x^4 +x^3+x^2 +1 (0x11D).
+* *   generator polynomial: G(x)= x^8 +x^7 +x^2 +1 (0x187).
 * * 
 * * Encoding: 223 data bytes -> 32 parity bytes -> 255 byte codeword.
 * * Decoding: Correct up to 16 random symbol errors; erasureless path
@@ -40,7 +40,7 @@ namespace sdr::mdm
     uint8_t log[256];                   // Log table
     GF256 (void)                        // Constructor builds tables
     {
-      uint16_t p=0x11D;                 // Primitive polynomial
+      uint16_t p=0x187;                 // Primitive polynomial
       uint16_t x=1;                     // Start with alpha^0=1
       std::memset(alog,0,sizeof(alog)); // Clear anti-log table
       std::memset(log,0,sizeof(log));   // Clear log table
@@ -61,7 +61,7 @@ namespace sdr::mdm
     }                                   // End constructor
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
     // GF(256) arithmetic operations existing under the contour of the given primitive
-    // polynomial x^8 +x^4 +x^3 +x^2 +1 (0x11D).
+    // polynomial G(x)= x^8 +x^7 +x^2 +1 (0x187).
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
     inline uint8_t Add (uint8_t a,uint8_t b) const { return a^b; } // GF(256) addition
     inline uint8_t Subtract (uint8_t a,uint8_t b) const { return a^b; } // GF(256) subtraction
@@ -124,18 +124,20 @@ namespace sdr::mdm
       inline void Assemble (void)
       {                                 // ~~~~~~~~~ Assemble ~~~~~~~~~~ //
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // g(x)=PROD_{i=1}^32}{x-alpha^i}
+        // g(x) = Prod_{i=1..32} (x + alpha^i)
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        gen.assign(33,0);               // Generator polynomial degree 32
-        gen[0]=1;                       // Start with 1
-        for (uint8_t i=1;i<=32;++i)     // For each factor (x + alpha^i)
-        {
-          uint8_t a=gf.alog[i];         // a = alpha^i
-          for (int j=i;j>=1;--j)        // For each term in polynomial
-            gen[j]=gf.Add(gen[j-1],gf.Multiply(a,gen[j]));
-          gen[0]=gf.Multiply(a,gen[0]); // constant term accumulates product of roots
+        gen.assign(33,0);               // Generator polynomial coefficients [0..32]
+        gen[0]=1;                       // Start with constant 1
+        // Build with 32 consecutive roots. If a specific offset is desired,
+        // adjust "reb" accordingly (e.g., 1 for alpha^1..alpha^32).
+        const int reb = 1;              // use alpha^1..alpha^32 (root exponent base)
+        for (int i=1;i<=32;++i)         // Current resulting degree == i
+        {                               // For each root
+          const uint8_t a=gf.alog[reb+(i-1)]; // alpha^{base+i-1}
+          for (int j=i;j>=1;--j)        // Update degrees j down to 1
+            gen[j]=gf.Add(gen[j-1], gf.Multiply(a, gen[j]));
+          gen[0]=gf.Multiply(a,gen[0]); // constant term
         }                               // Done assembling generator polynomial
-
         {
           char buf[1024];
           int off=0;
@@ -609,16 +611,49 @@ namespace sdr::mdm
           sto->ok=false;                // Decode failed
           return *sto;                  // Return status
         }                               // Good args, proceed with decode
+        const size_t n=code->size();    // Get codeword size
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // Ensure the output vector has space for 223 data bytes
         // and obtain a raw pointer
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        o->resize(223);                 // Resize output buffer
-        uint8_t* const p=o->data();     // Get raw output pointer
+        if (n==255)
+        {
+          o->resize(223);                 // Resize output buffer
+          uint8_t* const p=o->data();     // Get raw output pointer
+          return Decode(code->data(),p);  // Call raw pointer version
+        }
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // Decode expects a uint8_t* const* for the output buffer pointer
+        // Support shortened codewords if needed.
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        return Decode(code->data(),p);  // Call raw pointer version
+        if (n>=33&&n<=255)              // Valid shortened codeword?
+        {
+          const int k=static_cast<int>(n)-32;// Number of data bytes
+          if (k<=0||k>23)
+          {
+            sto->corr=0;                  // No corrections
+            sto->ok=false;                // Decode failed
+            return *sto;                  // Return status
+          }
+          const int nz=223-k;             // Number of zero bytes to prefeed for shortening
+          std::vector<uint8_t> full(255,0);// Full codeword buffer
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // Build full codeword with prefed zeroes
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          std::memcpy(full.data()+nz,code->data(),static_cast<size_t>(k));// Copy shortened codeword into full buffer
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // Place parity after data bytes... canonical tail at full[223..254]
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          std::memcpy(full.data()+223,code->data()+k,32);// Copy parity bytes
+          if (lg!=nullptr)
+            lg->Inf("RS DecodeVec: reconstructed full-length from shortened n=%zu (k=%d,nz=%d)",n,k,nz);
+          o->resize(223);               // Resize output buffer
+          uint8_t* const p=o->data();   // Get raw output pointer
+          return Decode(full.data(),p); // Call raw pointer version
+        }
+        // Unsupported codeword length
+        sto->corr=0;                    // No corrections
+        sto->ok=false;                  // Decode failed
+        return *sto;                    // Return status
       }                                 // ~~~~~~~~~~ DecodeVec ~~~~~~~~~~ //
     private:
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
