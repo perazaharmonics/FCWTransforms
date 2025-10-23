@@ -226,7 +226,7 @@ namespace sdr::mdm
       {                                // Yes, return failure
         sto->corr=0;                   // No corrections
         sto->ok=false;                 // No success
-        return*sto;                    // Return status
+        return *sto;                    // Return status
       }                                // Good args, proceed with decode
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
       // Sanity checks
@@ -297,7 +297,7 @@ namespace sdr::mdm
         std::memcpy(o,cw,K);           // Copy data bytes to output
         if (lg)
           lg->Inf(" RS Decode: all syndromes zero, no errors detected");
-        return*sto;                    // Return status
+        return *sto;                    // Return status
       }                                // Errors detected, proceed to decoding
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
       // Sanity check
@@ -375,7 +375,7 @@ namespace sdr::mdm
         sto->ok=false;                 // We are not OK
         if (lg)
           lg->Inf(" RS BM: L=%d (uncorrectable)",L);
-        return*sto;                    // Return status
+        return *sto;                    // Return status
       }                                // Proceed with L valid
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
       // (3) Chien: find roots of ?(a^i), i=0..254
@@ -413,7 +413,7 @@ namespace sdr::mdm
         sto->ok=false;                 // We are not OK
         if (lg)
           lg->Inf(" RS Chien: L=%d ne=%d (uncorrectable)",L,ne);
-        return*sto;                    // Return status
+        return *sto;                    // Return status
       }                                // Proceed with ne valid
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
       // optional: enforce ne==L
@@ -462,7 +462,7 @@ namespace sdr::mdm
         if (lg)
         {
           lg->Inf(" RS Forney[%d]: i=%3d j=%3d Xinv=a^{%3d} (0x%02X) d=0x%02X omx=0x%02X emag=0x%02X cw_before=0x%02X cw_after=0x%02X",
-                  k,i,j,(255-i)%255,Xinv,num,om[0],emag,bef,cw[j]);
+            k,i,j,(255-i)%255,Xinv,num,om[0],emag,bef,cw[j]);
         }
       }                                // Done processing all errors
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -473,7 +473,7 @@ namespace sdr::mdm
       {                                // Recompute S[i]=C(alpha^{112+i})
         S[i]=0;
         for (int j=0;j<N;++j)          // For each coefficient
-          if (cw[j]!=0)
+          if (cw[j]!=0)                // Non-zero cw?
             S[i]^=gf.Multiply(cw[j],gf.Power(gf.alog[ROOT_START+i],j));
         vld&=(S[i]==0);                // Valid if all syndromes are zero
         if (lg)
@@ -487,7 +487,7 @@ namespace sdr::mdm
         lg->Inf(" RS Verify: %s ne=%d corr=%d ok=%s",vld?"valid":"invalid",ne,sto->corr,vld?"true":"false");
       if (lg)
         lg->Inf(" RS Decode: end");    // Log decode end
-      return*sto;                      // Return status
+      return *sto;                      // Return status
     }                                  // ~~~~~~~~~~ Decode ~~~~~~~~~~ //
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
     // Decode but using vector input
@@ -500,7 +500,7 @@ namespace sdr::mdm
       {                                // Yes, return failure
         sto->corr=0;                   // No corrections
         sto->ok=false;                 // Decode failed
-        return*sto;                    // Return status
+        return *sto;                    // Return status
       }                                // Good args, proceed with decode
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
       // Ensure the output vector has space for 223 data bytes
@@ -519,7 +519,7 @@ namespace sdr::mdm
       {
         sto->corr=0;                   // No corrections
         sto->ok=false;                 // Decode failed
-        return*sto;                    // Return status
+        return *sto;                    // Return status
       }
       int nz=K-k;                      // Number of zero bytes to prefeed for shortening
       std::vector<uint8_t> full(N,0);  // Full codeword buffer
