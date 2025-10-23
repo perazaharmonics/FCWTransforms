@@ -286,7 +286,7 @@ namespace sdr::mdm
         for (int i=0;i<223;++i)         // For each data byte...
         {
           cw[static_cast<size_t>(32+i)]=code[i]; // Copy data byte
-          if (lg!=nullptr)
+          if ((i+1)%12==0&&lg!=nullptr)
             lg->Inf(" RS Decode: cw[%d]=data code[%d]=%02X",32+i,i,code[i]);
         }
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -365,6 +365,8 @@ namespace sdr::mdm
           sto->ok=true;                 // Decode successful
           if (o!=nullptr)               // Output buffer valid?
             std::memcpy(o,cw.data()+32,223);// Copy data bytes to output
+          if (lg)
+            lg->Inf(" RS Decode: all syndromes zero, no errors detected");
           return *sto;                  // Return status output
         }                               // Done with no errors.... Proceed to error correction....
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -443,6 +445,8 @@ namespace sdr::mdm
         {                               // Yes, uncorrectable
           sto->corr=0;                  // Say that 
           sto->ok=false;                // We are not OK.
+          if (lg)
+            lg->Inf(" RS BM: L=%d (uncorrectable); returned at Checking L < 0 || L > 16",L);
           return *sto;                  // Return status output
         }                               // Proceed with L valid
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -488,7 +492,9 @@ namespace sdr::mdm
         {                               // Yes
           sto->corr=0;                  // Say that
           sto->ok=false;                // We are not OK.
-           return *sto;                 // Return status output
+          if (lg)
+            lg->Inf(" RS Chien: L=%d ne=%d (uncorrectable); returned at checking ne==0||ne>16",L,ne);
+          return *sto;                  // Return status output
         }                               // Proceed with L valid
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // optional: enforce ne==L
@@ -569,11 +575,13 @@ namespace sdr::mdm
           vld&=(acc==0);                // Valid if all recomputed syndromes are zero
         }                               // Done recomputing all syndromes
         if (lg)
-          lg->Inf(" RS Verify: val=%d corr=%d", static_cast<int>(vld),ne);
-        if (vld)                        // Valid codeword after corrections?
+          lg->Inf(" RS Verify: val=%d ne=%d", static_cast<int>(vld),ne);
+        if (vld==0)                        // Valid codeword after corrections?
         {                               // Yes, successful decode
           sto->corr=ne;                 // Number of corrections
           sto->ok=true;                 // Decode successful
+          if (lg)
+            lg->Inf(" RS Chien: L=%d ne=%d (corrected), corr=%d, ok=%s",L,ne,sto->corr,(sto->ok?"true":"false"));
           if (o!=nullptr)               // Output buffer valid?
             std::memcpy(o,cw.data()+32,223);// Copy data bytes to output
         }                               // Done with valid codeword
@@ -581,7 +589,11 @@ namespace sdr::mdm
         {                               // Yes, unsuccessful decode
           sto->corr=0;                  // No corrections
           sto->ok=false;                // Decode failed
+          if (lg)
+            lg->Inf(" RS Chien: L=%d ne=%d (uncorrectable), corr=%d, ok=%s",L,ne,sto->corr,(sto->ok?"true":"false"));
         }                               // Return status output
+        if (lg)
+          lg->Inf(" RS Decode: end; returned here");       // Log decode end
         return *sto;                    // Return status output
       }                                 // ~~~~~~~~~~ Decode ~~~~~~~~~~ //
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
