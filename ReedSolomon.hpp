@@ -419,7 +419,7 @@ namespace sdr::mdm
       // optional: enforce ne==L
       // if (ne != L) { sto->corr = 0; sto->ok = false; return *sto; }
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // (4) O(x) = [ S(x) * ?(x) ] mod x^{32}
+      // (4) OMEGA(x) = [ S(x) * ?(x) ] mod x^{32}
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
       uint8_t om[2*T]={0};             // Omega polynomial
       for (int i=0;i<2*T;++i)          // For each degree in Omega
@@ -437,7 +437,7 @@ namespace sdr::mdm
         const int i=iroot[k];          // alpha^i was a root
         const int j=pos[k];            // coefficient index in cw[]
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // O(X^{-1}) / ?'(X^{-1})
+        // O(X^{-1}) / LAMBDA'(X^{-1})
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         uint8_t Xinv=gf.alog[(255-i)%255]; // Xinv = alpha^{255-i}
         uint8_t num=om[0];             // Omega evaluated at X^{-1}
@@ -454,7 +454,7 @@ namespace sdr::mdm
           continue;                    // Skip this error
         }                              // Proceed with non-zero derivative
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // Error magnitude: em = O(X^{-1}) / ?'(X^{-1})
+        // Error magnitude: em = OMEGA(X^{-1}) / LAMBDA'(X^{-1})
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         uint8_t emag=gf.Multiply(num,gf.Inverse(den)); // Magnitude of the error
         uint8_t bef=cw[j];             // Before codeword
@@ -541,7 +541,7 @@ namespace sdr::mdm
     // GF(256) arithmetic tables and functions
     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
     GF256 gf;                         // GF(256) arithmetic tables
-    RSStatus*sto{nullptr};            // Status object
+    RSStatus* sto{nullptr};            // Status object
     std::vector<uint8_t> gen;         // Generator polynomial coefficients
     // Logger for this component
     std::unique_ptr<logx::Logger> lg{};
