@@ -5,7 +5,8 @@
  * * Description:
  * *   CCSDS Reed-Solomon error correction encoder/decoder for RS(255,223) with
  * *   support for both encoding and decoding operations. , t=16 over GF(256) with
- * *   generator polynomial: G(x)= x^8 +x^7 +x^2 +1 (0x187).
+ * *   generator polynomial: G(x)= x^8 +x^7 +x^2 + 1 (0x11d). Derived from the C# reference,
+ * *   which in-itself is derived from Phil Karn's "General purpose Reed-Solomon decoder for
  * * 
  * * Encoding: 223 data bytes -> 32 parity bytes -> 255 byte codeword.
  * * Decoding: Correct up to 16 random symbol errors; erasureless path
@@ -14,16 +15,20 @@
  * * Author:
  * *  JEP, J. Enrique Peraza
  * *
+ * * References:
+ * *  https://github.com/crozone/ReedSolomonCCSDS/tree/master
+ * *  "General purpose Reed-Solomon decoder for 8-bit symbols or less", Copyright 2003 Phil Karn, KA9Q
  * *
  */
 #pragma once
-#include<cstdint>
-#include<vector>
-#include<cstring>
-#include<cstdarg>
-#include<cstdio>
-#include<memory>
-#include"../logger/Logger.h"
+#include <cstdint>
+#include <cstddef>
+#include <vector>
+#include <cstring>
+#include <cstdarg>
+#include <cstdio>
+#include <memory>
+#include "../logger/Logger.h"
 
 // Mutual-exclusion guard: ensure RS API types are defined only once
 #ifndef SDR_MDM_RS_API_GUARD
@@ -31,521 +36,674 @@
 
 namespace sdr::mdm
 {
-  struct RSStatus
+  namespace detail
   {
-    int32_t corr{0};                    // Number of corrected symbols
-    bool ok{false};                     // True if decode successful
-    RSStatus (void)=default;            // Default constructor
-  };
-  struct GF256
-  {
-    uint8_t alog[512];                  // Anti-log table
-    uint8_t log[256];                   // Log table
-    GF256(void)                         // Constructor builds tables
+    struct RSTables
     {
-      uint16_t p=0x187;                 // Primitive polynomial
-      uint16_t x=1;                     // Start with alpha^0=1
-      std::memset(alog,0,sizeof(alog)); // Clear anti-log table
-      std::memset(log,0,sizeof(log));   // Clear log table
-      for (uint16_t i=0;i<255;++i)       // For each exponent
-      {                                 // Build tables
-        alog[i]=static_cast<uint8_t>(x);// Store anti-log
-        log[x]=i;                       // Store log
-        x<<=1;                          // Multiply by alpha (x)
-        if (x&0x100)                     // Overflow?
-          x^=p;                         // Reduce modulo primitive polynomial
-      }                                 // Done building tables
+     constexpr static int rb=8;         // Bits per symbol
+     constexpr static int N=255;        // CW length or symbols per block (1<<rb)-1
+     constexpr static int nroot=32;     // Number of roots = parity symbols
+     constexpr static int nfr=112;      // First consecutive root, index from
+     constexpr static int prim=11;      // Primitive element, index from
+     constexpr static int iprim=116;    // I-th primitive root of unity, index from
+     constexpr static int a0=N;         // Alpha^0
+     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+     // Alpha to octet table
+     // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+     inline static constexpr uint8_t ato[256]=
+     {
+        0x01,0x02,0x04,0x08,0x10,0x20,0x40,0x80,0x87,0x89,0x95,0xad,0xdd,0x3d,0x7a,0xf4,
+        0x6f,0xde,0x3b,0x76,0xec,0x5f,0xbe,0xfb,0x71,0xe2,0x43,0x86,0x8b,0x91,0xa5,0xcd,
+        0x1d,0x3a,0x74,0xe8,0x57,0xae,0xdb,0x31,0x62,0xc4,0x0f,0x1e,0x3c,0x78,0xf0,0x67,
+        0xce,0x1b,0x36,0x6c,0xd8,0x37,0x6e,0xdc,0x3f,0x7e,0xfc,0x7f,0xfe,0x7b,0xf6,0x6b,
+        0xd6,0x2b,0x56,0xac,0xdf,0x39,0x72,0xe4,0x4f,0x9e,0xbb,0xf1,0x65,0xca,0x13,0x26,
+        0x4c,0x98,0xb7,0xe9,0x55,0xaa,0xd3,0x21,0x42,0x84,0x8f,0x99,0xb5,0xed,0x5d,0xba,
+        0xf3,0x61,0xc2,0x03,0x06,0x0c,0x18,0x30,0x60,0xc0,0x07,0x0e,0x1c,0x38,0x70,0xe0,
+        0x47,0x8e,0x9b,0xb1,0xe5,0x4d,0x9a,0xb3,0xe1,0x45,0x8a,0x93,0xa1,0xc5,0x0d,0x1a,
+        0x34,0x68,0xd0,0x27,0x4e,0x9c,0xbf,0xf9,0x75,0xea,0x53,0xa6,0xcb,0x11,0x22,0x44,
+        0x88,0x97,0xa9,0xd5,0x2d,0x5a,0xb4,0xef,0x59,0xb2,0xe3,0x41,0x82,0x83,0x81,0x85,
+        0x8d,0x9d,0xbd,0xfd,0x7d,0xfa,0x73,0xe6,0x4b,0x96,0xab,0xd1,0x25,0x4a,0x94,0xaf,
+        0xd9,0x35,0x6a,0xd4,0x2f,0x5e,0xbc,0xff,0x79,0xf2,0x63,0xc6,0x0b,0x16,0x2c,0x58,
+        0xb0,0xe7,0x49,0x92,0xa3,0xc1,0x05,0x0a,0x14,0x28,0x50,0xa0,0xc7,0x09,0x12,0x24,
+        0x48,0x90,0xa7,0xc9,0x15,0x2a,0x54,0xa8,0xd7,0x29,0x52,0xa4,0xcf,0x19,0x32,0x64,
+        0xc8,0x17,0x2e,0x5c,0xb8,0xf7,0x69,0xd2,0x23,0x46,0x8c,0x9f,0xb9,0xf5,0x6d,0xda,
+        0x33,0x66,0xcc,0x1f,0x3e,0x7c,0xf8,0x77,0xee,0x5b,0xb6,0xeb,0x51,0xa2,0xc3,0x00
+      };
+      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+      // Index of octet table
+      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+      inline static constexpr uint8_t idxof[256]=
+      {
+        0xff,0x00,0x01,0x63,0x02,0xc6,0x64,0x6a,0x03,0xcd,0xc7,0xbc,0x65,0x7e,0x6b,0x2a,
+        0x04,0x8d,0xce,0x4e,0xc8,0xd4,0xbd,0xe1,0x66,0xdd,0x7f,0x31,0x6c,0x20,0x2b,0xf3,
+        0x05,0x57,0x8e,0xe8,0xcf,0xac,0x4f,0x83,0xc9,0xd9,0xd5,0x41,0xbe,0x94,0xe2,0xb4,
+        0x67,0x27,0xde,0xf0,0x80,0xb1,0x32,0x35,0x6d,0x45,0x21,0x12,0x2c,0x0d,0xf4,0x38,
+        0x06,0x9b,0x58,0x1a,0x8f,0x79,0xe9,0x70,0xd0,0xc2,0xad,0xa8,0x50,0x75,0x84,0x48,
+        0xca,0xfc,0xda,0x8a,0xd6,0x54,0x42,0x24,0xbf,0x98,0x95,0xf9,0xe3,0x5e,0xb5,0x15,
+        0x68,0x61,0x28,0xba,0xdf,0x4c,0xf1,0x2f,0x81,0xe6,0xb2,0x3f,0x33,0xee,0x36,0x10,
+        0x6e,0x18,0x46,0xa6,0x22,0x88,0x13,0xf7,0x2d,0xb8,0x0e,0x3d,0xf5,0xa4,0x39,0x3b,
+        0x07,0x9e,0x9c,0x9d,0x59,0x9f,0x1b,0x08,0x90,0x09,0x7a,0x1c,0xea,0xa0,0x71,0x5a,
+        0xd1,0x1d,0xc3,0x7b,0xae,0x0a,0xa9,0x91,0x51,0x5b,0x76,0x72,0x85,0xa1,0x49,0xeb,
+        0xcb,0x7c,0xfd,0xc4,0xdb,0x1e,0x8b,0xd2,0xd7,0x92,0x55,0xaa,0x43,0x0b,0x25,0xaf,
+        0xc0,0x73,0x99,0x77,0x96,0x5c,0xfa,0x52,0xe4,0xec,0x5f,0x4a,0xb6,0xa2,0x16,0x86,
+        0x69,0xc5,0x62,0xfe,0x29,0x7d,0xbb,0xcc,0xe0,0xd3,0x4d,0x8c,0xf2,0x1f,0x30,0xdc,
+        0x82,0xab,0xe7,0x56,0xb3,0x93,0x40,0xd8,0x34,0xb0,0xef,0x26,0x37,0x0c,0x11,0x44,
+        0x6f,0x78,0x19,0x9a,0x47,0x74,0xa7,0xc1,0x23,0x53,0x89,0xfb,0x14,0x5d,0xf8,0x97,
+        0x2e,0x4b,0xb9,0x60,0x0f,0xed,0x3e,0xe5,0xf6,0x87,0xa5,0x17,0x3a,0xa3,0x3c,0xb7
+      };
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Perform a symmetric extension of the anti-log table
+      // Generator polynomial coefficients for RS(255,223)
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      for (uint16_t i=255;i<512;++i)     // Extend anti-log table with period 255
-        alog[i]=alog[i-255];            // allow direct indexing without explicit mod
-      log[0]=0;                         // Table log[0] is undefined, set to 0
-    }                                   // End constructor
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    // GF(256) arithmetic operations existing under the contour of the given primitive
-    // polynomial G(x)= x^8 +x^7 +x^2 + x + 1 (0x187).
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    inline uint8_t Add (uint8_t a,uint8_t b)const{return a^b;} // GF(256) addition
-    inline uint8_t Subtract (uint8_t a,uint8_t b)const{return a^b;} // GF(256) subtraction
-    inline uint8_t Multiply (uint8_t a,uint8_t b)const // GF(256) multiplication
+      inline static constexpr uint8_t genpol[33]=
+      {
+        0x00,0xf9,0x3b,0x42,0x04,0x2b,0x7e,0xfb,0x61,0x1e,0x03,0xd5,0x32,0x42,0xaa,0x05,
+        0x18,0x05,0xaa,0x42,0x32,0xd5,0x03,0x1e,0x61,0xfb,0x7e,0x2b,0x04,0x42,0x3b,0xf9,
+        0x00
+      };
+      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+      // Conversion table from Talay to Dual Basis
+      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+      inline static constexpr uint8_t tdb[256]=
+      {
+        0x00,0x7b,0xaf,0xd4,0x99,0xe2,0x36,0x4d,0xfa,0x81,0x55,0x2e,0x63,0x18,0xcc,0xb7,
+        0x86,0xfd,0x29,0x52,0x1f,0x64,0xb0,0xcb,0x7c,0x07,0xd3,0xa8,0xe5,0x9e,0x4a,0x31,
+        0xec,0x97,0x43,0x38,0x75,0x0e,0xda,0xa1,0x16,0x6d,0xb9,0xc2,0x8f,0xf4,0x20,0x5b,
+        0x6a,0x11,0xc5,0xbe,0xf3,0x88,0x5c,0x27,0x90,0xeb,0x3f,0x44,0x09,0x72,0xa6,0xdd,
+        0xef,0x94,0x40,0x3b,0x76,0x0d,0xd9,0xa2,0x15,0x6e,0xba,0xc1,0x8c,0xf7,0x23,0x58,
+        0x69,0x12,0xc6,0xbd,0xf0,0x8b,0x5f,0x24,0x93,0xe8,0x3c,0x47,0x0a,0x71,0xa5,0xde,
+        0x03,0x78,0xac,0xd7,0x9a,0xe1,0x35,0x4e,0xf9,0x82,0x56,0x2d,0x60,0x1b,0xcf,0xb4,
+        0x85,0xfe,0x2a,0x51,0x1c,0x67,0xb3,0xc8,0x7f,0x04,0xd0,0xab,0xe6,0x9d,0x49,0x32,
+        0x8d,0xf6,0x22,0x59,0x14,0x6f,0xbb,0xc0,0x77,0x0c,0xd8,0xa3,0xee,0x95,0x41,0x3a,
+        0x0b,0x70,0xa4,0xdf,0x92,0xe9,0x3d,0x46,0xf1,0x8a,0x5e,0x25,0x68,0x13,0xc7,0xbc,
+        0x61,0x1a,0xce,0xb5,0xf8,0x83,0x57,0x2c,0x9b,0xe0,0x34,0x4f,0x02,0x79,0xad,0xd6,
+        0xe7,0x9c,0x48,0x33,0x7e,0x05,0xd1,0xaa,0x1d,0x66,0xb2,0xc9,0x84,0xff,0x2b,0x50,
+        0x62,0x19,0xcd,0xb6,0xfb,0x80,0x54,0x2f,0x98,0xe3,0x37,0x4c,0x01,0x7a,0xae,0xd5,
+        0xe4,0x9f,0x4b,0x30,0x7d,0x06,0xd2,0xa9,0x1e,0x65,0xb1,0xca,0x87,0xfc,0x28,0x53,
+        0x8e,0xf5,0x21,0x5a,0x17,0x6c,0xb8,0xc3,0x74,0x0f,0xdb,0xa0,0xed,0x96,0x42,0x39,
+        0x08,0x73,0xa7,0xdc,0x91,0xea,0x3e,0x45,0xf2,0x89,0x5d,0x26,0x6b,0x10,0xc4,0xbf
+      };
+      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+      // Conversion from Talay to Conventional Basis
+      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+      inline static constexpr uint8_t tcb[256]=
+      {
+        0x00,0xcc,0xac,0x60,0x79,0xb5,0xd5,0x19,0xf0,0x3c,0x5c,0x90,0x89,0x45,0x25,0xe9,
+        0xfd,0x31,0x51,0x9d,0x84,0x48,0x28,0xe4,0x0d,0xc1,0xa1,0x6d,0x74,0xb8,0xd8,0x14,
+        0x2e,0xe2,0x82,0x4e,0x57,0x9b,0xfb,0x37,0xde,0x12,0x72,0xbe,0xa7,0x6b,0x0b,0xc7,
+        0xd3,0x1f,0x7f,0xb3,0xaa,0x66,0x06,0xca,0x23,0xef,0x8f,0x43,0x5a,0x96,0xf6,0x3a,
+        0x42,0x8e,0xee,0x22,0x3b,0xf7,0x97,0x5b,0xb2,0x7e,0x1e,0xd2,0xcb,0x07,0x67,0xab,
+        0xbf,0x73,0x13,0xdf,0xc6,0x0a,0x6a,0xa6,0x4f,0x83,0xe3,0x2f,0x36,0xfa,0x9a,0x56,
+        0x6c,0xa0,0xc0,0x0c,0x15,0xd9,0xb9,0x75,0x9c,0x50,0x30,0xfc,0xe5,0x29,0x49,0x85,
+        0x91,0x5d,0x3d,0xf1,0xe8,0x24,0x44,0x88,0x61,0xad,0xcd,0x01,0x18,0xd4,0xb4,0x78,
+        0xc5,0x09,0x69,0xa5,0xbc,0x70,0x10,0xdc,0x35,0xf9,0x99,0x55,0x4c,0x80,0xe0,0x2c,
+        0x38,0xf4,0x94,0x58,0x41,0x8d,0xed,0x21,0xc8,0x04,0x64,0xa8,0xb1,0x7d,0x1d,0xd1,
+        0xeb,0x27,0x47,0x8b,0x92,0x5e,0x3e,0xf2,0x1b,0xd7,0xb7,0x7b,0x62,0xae,0xce,0x02,
+        0x16,0xda,0xba,0x76,0x6f,0xa3,0xc3,0x0f,0xe6,0x2a,0x4a,0x86,0x9f,0x53,0x33,0xff,
+        0x87,0x4b,0x2b,0xe7,0xfe,0x32,0x52,0x9e,0x77,0xbb,0xdb,0x17,0x0e,0xc2,0xa2,0x6e,
+        0x7a,0xb6,0xd6,0x1a,0x03,0xcf,0xaf,0x63,0x8a,0x46,0x26,0xea,0xf3,0x3f,0x5f,0x93,
+        0xa9,0x65,0x05,0xc9,0xd0,0x1c,0x7c,0xb0,0x59,0x95,0xf5,0x39,0x20,0xec,0x8c,0x40,
+        0x54,0x98,0xf8,0x34,0x2d,0xe1,0x81,0x4d,0xa4,0x68,0x08,0xc4,0xdd,0x11,0x71,0xbd
+      };
+    }; // struct RSTables
+    } // namespace detail
+    struct RSStatus
     {
-      if (a==0||b==0)                    // Zero factor?
-        return 0;                       // Yes, return zero
-      uint16_t s=static_cast<uint16_t>(log[a])+static_cast<uint16_t>(log[b]);
-      return alog[s%255];               // Lookup anti-log
-    }                                   // End Multiply
-    inline uint8_t Inverse (uint8_t a) const // GF(256) multiplicative inverse
+      int32_t corr{0};                    // Number of corrected symbols
+      bool ok{false};                     // True if decode successful
+      RSStatus (void)=default;            // Default constructor            
+    };    
+    class ReedSolomon
     {
-      if (a==0)                          // Zero has no inverse
-        return 0;                       // Return zero
-      return alog[255-log[a]];          // Inverse is alpha^{255 - log(a)}
-    }                                   // ~~~~~~~~~~ Inverse ~~~~~~~~~~ //
-    inline uint8_t Power (uint8_t a,
-      uint8_t e) const // ~~~~~~~~~~ Power ~~~~~~~~~~ //
-    {
-      if (e==0)                         // Any element to the power of 0 is 1
-        return 1;                       // So just return 1.
-      if (a==0)                         // 0 to any power is 0
-        return 0;                       // So just return 0.
-      int32_t r=(log[a]*e)%255;         // Compute exponent mod 255
-      if (r<0)                          // Negative?
-        r+=255;                         // Wrap around
-      return alog[r];                   // Return result
-    }                                   // ~~~~~~~~~~ Power ~~~~~~~~~~ //
-  }; // End struct GF256
-  // Reed-Solomon RS(255,223) encoder/decoder class
-  class RS255223
-  {
-  public:
-    static constexpr uint8_t N=255;    // Code length
-    static constexpr uint8_t K=223;    // Data length
-    static constexpr uint8_t T=16;     // Error correction capability
-    static constexpr uint8_t ROOT_START=112; // CCSDS: roots alpha^112 to alpha^143
+        public:
+          using T=detail::RSTables;
+          static constexpr int N=T::N;  // Codeword length
+          static constexpr int np=T::nroot; // Number of roots (parity symbols)
+          static constexpr int K=T::N-T::nroot; // Data length
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+        // Working state for one decode
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+        struct CodecState
+        {
+          const uint8_t* in{nullptr};   // Input codeword
+          uint8_t* o{nullptr};    // Output dataword
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // Optional erasures
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          const int* eras{nullptr};     // Erasure positions
+          int neras{0};                 // Number of erasures
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // Stage buffers
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          uint8_t s[np]{};              // Syndromes
+          uint8_t b[np+1]{};            // B polynomial
+          uint8_t t[np+1]{};            // T polynomial
+          uint8_t om[np+1]{};           // Omega polynomial
+          uint8_t root[np]{};           // Error roots
+          uint8_t reg[np+1]{};          // Lambda shift register
+          uint8_t loc[np]{};            // Error locations
+          uint8_t lambda[np+1]{};       // Lambda polynomial
+          int synerr{0};                // Syndrome error flag
+          int ordl{0};                  // Number of lambda coefficients (order)
+          int ordom{0};                 // Number of omega coefficients (order)
+          int nr{0};                    // Number of roots found
+          bool forfail{false};          // True if Forney Correction fails.
+        };  // struct CodecState
+          ReedSolomon (void)
+          {
+            // Lazily create a logger so encode/decode paths emit to logs
+            // Tests/exporters typically pass SDR env, so Logger resolves to $SDR/src/logs/log.txt
+            lg = logx::Logger::NewLogger();
+          }
+          ~ReedSolomon (void)=default;  // Default destructor
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // Encode/Decode functions
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          inline void Encode (
+            uint8_t* dat,               // [Input,Output] dataword (223B); mutated if dbase=true
+            size_t dlen,                // Length of dataword (>=223)
+            uint8_t* par,               // Output parity symbols (32B)
+            size_t plen,                // Length of parity symbols (>=32)
+            bool dbase=false) const     // True if input data is in dual basis
+          {                             // ~~~~~~~~~ Encode ~~~~~~~~~~ //
+            if (dat==nullptr||par==nullptr)// Bad input args?
+              return;                   // Early return, can't do much.
+            if (dlen<static_cast<size_t>(K)||plen<static_cast<size_t>(np))
+              return;                   // Early return, can't do much.
+            if (lg!=nullptr)
+              lg->Inf("RS Encode: Begin encoding %zu data bytes",dlen);
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Convert data from dual basis to conventional basis, if requested
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            if (dbase==true)            // Input data in dual basis?
+            {                           // Yes, convert to conventional basis
+              for (int i=0;i<K;++i)     // For each data byte
+                dat[i]=T::tcb[dat[i]];  // Convert to conventional basis
+            }
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Zeroize parity
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            std::memset(par,0,np);      // Clear parity bytes
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Shift register parity accumulation
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            for (int i=0;i<K;++i)       // For each data byte
+            {
+              const uint8_t fb=T::idxof[static_cast<uint8_t>(dat[i]^par[0])]; // Feedback byte
+              if (fb!=T::a0)            // Non-zero feedback?
+              {                         // Yes, update parity
+                for (int j=1;j<np;++j)  // For each parity byte
+                  par[j]^=T::ato[(fb+T::genpol[np-j])%T::N];// Update parity byte
+                if (lg!=nullptr)
+                  lg->Deb("RS Encode: Data byte %d, feedback=0x%02X",i,fb);
+              }                         // Done updating parity
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              // Shift left by 1
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              std::memmove(&par[0],&par[1],static_cast<size_t>(np-1));// Shift left
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              // Inject new parity symbol
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              par[np-1]=(fb!=T::a0)?T::ato[(fb+T::genpol[0])%T::N]:0;// New parity byte
+              if (lg!=nullptr)
+                lg->Deb("RS Encode: Parity after data byte %d:",i);
+            }                           // Done with shift register
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Convert parity to dual basis
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            if (dbase==true)            // Output parity in dual basis?
+            {                           // Yes, convert to dual basis
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              // Convert each parity byte back to dual basis
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              for (int i=0;i<K;++i)     // For each data byte
+                dat[i]=T::tdb[dat[i]];  // Convert to dual basis
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              // Convert parity bytes to dual basis
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              for (int i=0;i<np;++i)    // For each parity byte
+                par[i]=T::tdb[par[i]];  // Convert to dual basis
+            }                           // Done converting to dual basis
+          }                             // ~~~~~~~~~ Encode ~~~~~~~~~~ //
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // Encode a 255-byte block (223 data + 32 parity) in-place
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          inline void EncodeBlock (
+            uint8_t* bl,                // [In,Out] 255B buffer (first 223B = data)
+            size_t len,                 // Length of buffer (>=255)
+            bool dbase=false) const     // True if input data is in dual basis
+          {                             // ~~~~~~~~~ EncodeBlock ~~~~~~~~~~ //
+            if (bl==nullptr||len<static_cast<size_t>(N))// Bad args?
+              return;                   // Early return, can't do much.
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Pointers to data and parity windows
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            uint8_t* d=bl;              // Data window
+            uint8_t* p=bl+K;            // Parity window
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Call Encode function
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            Encode(d,K,p,np,dbase);     // Encode the block
+          }                             // ~~~~~~~~~ EncodeBlock ~~~~~~~~~~ //
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // High-level decode function
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          inline RSStatus Decode (
+            const uint8_t* cw255,       // Input codeword
+            uint8_t* in223,             // Output dataword
+            const int* eras=nullptr,    // Optional erasure positions
+            int ner=0) const            // Number of erasures                
+          {                             // ~~~~~~~~~ Decode ~~~~~~~~~ //
+            RSStatus sto{};             // Status object to return
+            if (cw255==nullptr||in223==nullptr)// Bad input args?
+              return sto;               // Return with error status
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Work on a mutable copy of the block
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            uint8_t block[N];           // Mutable copy of codeword
+            std::memcpy(block,cw255,N); // Copy input codeword
+            CodecState cs{};            // Codec state
+            cs.in=block;                // Set input codeword
+            cs.o=in223;                 // Set output dataword
+            cs.eras=eras;               // Set erasure positions
+            cs.neras=ner;               // Set number of erasures
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // 1) Compute syndromes
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            if (!ComputeSyndromes(cs))  // Could we compute the syndromes?
+            {                           // No, no errors detected.
+              std::memcpy(cs.o,cs.in,K);// Copy data to output
+              sto.ok=true;              // Set success status
+              sto.corr=0;               // No corrections
+              return sto;               // Early return.
+            }                           // Done computing syndromes
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // 2) Berlekamp-Massey to compute error locator polynomial
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            if (!BerlekampMassey(cs))   // Could we compute the error locator?
+            {                           // No, there was a decode failure.
+              sto.ok=false;             // Decode failed.
+              sto.corr=-1;              // Indicate failure with -1
+              return sto;               // Early return.
+            }                           // Done Berlekamp-Massey
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // 3) ChienSearch: Find roots of error locator polynomial
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            int n=ChienSearch(cs);      // Find roots
+            if (n<0)                    // Any errors found?
+            {
+              sto.ok=false;             // Decode failed.
+              sto.corr=-1;              // Indicate failure with -1
+              return sto;               // Early return.
+            }                           // Done with Chien Search
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // 4) Compute Omega polynomial: s(x)*lambda(x) mod x^np (index form)
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            ComputeOmega(cs);           // Compute Omega polynomial
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // 5) Forney algorithm to compute error magnitudes
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            ForneyCorrection(cs,block); // Correct the errors
+            if (cs.forfail)             // Did Forney fail?
+            {                           // Yes, indicate failure
+              sto.ok=false;             // Decode failed.
+              sto.corr=-1;              // Indicate failure with -1
+              return sto;               // Early return.
+            }                           // Done Forney correction
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // 6) Recompute syndromes to verify correction
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            if (!VerifyCorrections(cs,block)) // Were corrections successful?
+            {                           // No, indicate failure
+              sto.ok=false;             // Decode failed.
+              sto.corr=-1;              // Indicate failure with -1
+              return sto;               // Early return.
+            }                           // Done verifying corrections
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Copy data to output
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            std::memcpy(cs.o,block,K);  // Copy data to output
+            sto.ok=true;                // Set success status
+            sto.corr=cs.nr;             // Set number of corrections
+            return sto;                 // Return with success status
+          }                             // ~~~~~~~~~ Decode ~~~~~~~~~ //
+        protected:
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // 1) Compute syndromes
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          inline bool ComputeSyndromes (
+            CodecState& cs) const       
+          {                             // ~~~~~~~~~ ComputeSyndromes ~~~~~~~~~ //
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Form the syndromes in polynomial form
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            for (int i=0;i<np;++i)      // For each syndrome
+              cs.s[i]=cs.in[0];         // Initialize to first byte
+            for (int i=1;i<N;++i)       // For each byte in codeword
+            {                           // and for...
+              for (int j=0;j<np;++j)    // The number of roots (parity symbols)
+              {                         // Compute syndrome j
+                if (cs.s[j]==0)         // If current syndrome is zero
+                  cs.s[j]=cs.in[i];     // Next byte is the new syndrome
+                else                    // Else, non zero, compute syndrome
+                  cs.s[j]=static_cast<uint8_t>(cs.in[i]^T::ato[(T::idxof[cs.s[j]]+(T::nfr+j)*T::prim)%T::N]);
+                if (lg!=nullptr)
+                  lg->Deb("RS Syn: After byte %d, syndrome %d=0x%02X",i,j,cs.s[j]);
+              }                         // End for number of roots
+            }                           // End for each byte in codeword
+            cs.synerr=0;                // Clear syndrome error flag
+            for (int i=0;i<np;++i)      // For the number of parity symbols (roots)
+            {                           // Check each syndrome
+              cs.synerr|=cs.s[i];       // Accumulate syndrome bytes
+              cs.s[i]=T::idxof[cs.s[i]];// Convert to index form
+              if (lg!=nullptr)
+                lg->Deb("RS Syn: Syndrome %d=0x%02X (index form)",i,cs.s[i]);
+            }                           // End for each parity symbol
+            return (cs.synerr!=0);      // Return true if any syndrome non zero
+          }                             // ~~~~~~~~~ ComputeSyndromes ~~~~~~~~~ //
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // 2) Berlekamp-Massey algorithm to compute error locator polynomial
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          inline bool BerlekampMassey (
+            CodecState& cs) const
+          {                             // ~~~~~~~~~ BerlekampMassey ~~~~~~~~~ //
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Lambda <- 1, all others 0
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            std::memset(cs.lambda,0,sizeof(cs.lambda));// Clear lambda
+            cs.lambda[0]=1;             // Lambda_0=1
+            if (lg!=nullptr)
+              lg->Inf("RS BM: Begin Berlekamp-Massey algorithm");
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Fold erasure into Lambda if provided
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            if (cs.eras!=nullptr&&cs.neras>0)// Any erasures?
+            {                           // Yes, fold into Lambda
+              cs.lambda[1]=T::ato[(T::prim*(T::N-1-cs.eras[0]))%T::N];// First erasure
+              for (int i=1;i<cs.neras;++i)// For the remaining erasure to process...
+              {                         // Compute next erasure
+                uint8_t u=static_cast<uint8_t>((T::prim*(T::N-1-cs.eras[i])) % T::N);
+                for (int j=i+1;j>0;--j) // Starting from the highest degree coeff
+                {
+                  uint8_t tmp=T::idxof[cs.lambda[j-1]];// Get lambda j-1 in index form
+                  if (tmp!=T::a0)       // Non-zero column?
+                    cs.lambda[j]^=T::ato[(tmp+u)%T::N];// Update lambda j
+                }                       // End for each lambda coeff
+                if (lg!=nullptr)      // Logging enabled?
+                {                     // Log current lambda polynomial
+                  lg->Deb("RS BM: After erasure %d at pos %d, lambda=",i,cs.eras[i]);
+                  for (int k=0;k<=np;++k)
+                    lg->Deb("%02X ",cs.lambda[k]);
+                }                     // End logging
+              }                         // End for each erasure
+            }                           // End if any erasures
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Update B(x) polynomial
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            for (int i=0;i<=np;++i)
+              cs.b[i]=T::idxof[cs.lambda[i]];// B(x)=lambda(x) in index form
+            int r=cs.neras;             // r=number of erasures
+            int elf=cs.neras;           // elf=last failure position
+            while (++r<=np)             // While we have more parity symbols than # of erasures
+            {                           // Compute discrepancy in polynomial form
+              uint8_t d=0;              // Discrepancy
+              for (int i=0;i<r;++i)     // For each coeff up to r... 
+                if ((cs.lambda[i]!=0)&&(cs.s[r-i-1]!=T::a0))// Did we find any non-zero terms?
+                  d^=T::ato[(T::idxof[cs.lambda[i]]+cs.s[r-i-1])%T::N];// Yes, update discrepancy
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              // Convert discrepancy to index form
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              d=T::idxof[d];            // Discrepancy in index form
+              if (d==T::a0)             // Did we find any discrepancy?
+              {                         // No, shift B(x) <- x*B(x)
+                std::memmove(&cs.b[1],&cs.b[0],np); // Shift B(x) coeffs
+                cs.b[0]=T::a0;          // Set B_0=0
+              }                         // End if discrepancy==N.
+              else                      // Else, non-zero discrepancy
+              {                         // Update T(x)
+                // ~~~~~~~~~~~~~~~~~~~~ //
+                // T(x)=Lambda(x)-d*x*B(x)
+                // ~~~~~~~~~~~~~~~~~~~~ //
+                cs.t[0]=cs.lambda[0];   // T_0=Lambda_0
+                for (int i=0;i<np;++i)  // For each coeff up to # of parity symbols...
+                {
+                  if (cs.b[i]!=T::a0)   // Non-zero B_i?
+                    cs.t[i+1]=static_cast<uint8_t>(cs.lambda[i+1]^T::ato[(d+cs.b[i])%T::N]);
+                  else                  // Else, B_i==0
+                    cs.t[i+1]=cs.lambda[i+1];// T_i+1=Lambda_i+1
+                }                       // End for each coeff
+                if ((2*elf)<=(r+cs.neras-1))// Is is a significant failure?
+                {                       // Yes, update B(x)
+                  elf=r+cs.neras-elf;   // Update elf
+                  // ~~~~~~~~~~~~~~~~~~ //
+                  // B(x) <- inv(d)*lambda(x)
+                  // ~~~~~~~~~~~~~~~~~~ //
+                  for (int i=0;i<=np;++i)
+                    cs.b[i]=(cs.lambda[i]==0)?T::a0:static_cast<uint8_t>((T::idxof[cs.lambda[i]]-d+T::N)%T::N);
+                  if (lg!=nullptr)
+                    lg->Deb("RS BM: Significant failure at r=%d, updated B(x)",r);
+                }                       // Done updating B(x)
+                else                    // Else, non-significant failure
+                {                       // Shift T(x) into B(x)
+                  // ~~~~~~~~~~~~~~~~~~ //
+                  // Shift B(x) <- x*B(x)
+                  // ~~~~~~~~~~~~~~~~~~ //
+                  std::memmove(&cs.b[1],&cs.b[0],np); // Shift B(x) coeffs
+                  cs.b[0]=T::a0;        // Set B_0=0
+                  if (lg!=nullptr)
+                    lg->Deb("RS BM: Non-significant failure at r=%d, shifted B(x)",r);
+                }                       // End else non-significant failure
+                std::memcpy(cs.lambda,cs.t,sizeof(cs.lambda));// Copy T(x) to Lambda(x)
+              }                         // End else non-zero discrepancy
+              if (lg!=nullptr)// Logging enabled every 4 iterations
+              {                         // Log current lambda polynomial
+                lg->Deb("RS BM: r=%d lambda=",r);
+                for (int i=0;i<=np;++i)
+                  lg->Deb("%02X ",cs.lambda[i]);
+              }                         // End logging
+            }                           // End while r<=np
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // To index form; compute deg(lambda)
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            cs.ordl=0;                  // Clear lambda coeff order
+            for (int i=0;i<=np;++i)     // For each lambda coeff
+            {                           // Convert to index form
+              cs.lambda[i]=T::idxof[cs.lambda[i]];// To index form
+              if (cs.lambda[i]!=T::a0)  // Non-zero coeff?
+                cs.ordl=i;              // Update order
+              if (lg!=nullptr)          // Logging enabled?
+                lg->Deb("RS BM: Final lambda[%d]=%02X",i,cs.lambda[i]);
+            }                           // Done converting lambda coeffs to index form
+            if (lg!=nullptr)
+              lg->Inf("RS BM: Completed Berlekamp-Massey algorithm (success)");
+            return true;                // Return success
+          }                             // ~~~~~~~~~ BerlekampMassey ~~~~~~~~~ //
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // 3) Chien Search to find error locations
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          inline int ChienSearch (
+            CodecState& cs) const
+          {                             // ~~~~~~~~~~ ChienSearch ~~~~~~~~~~ //
+            if (lg!=nullptr)
+              lg->Inf("RS CS: Begin Chien's Search algorithm");
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // reg[1..] <- lambda[1..]
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            std::memset(cs.reg,0,sizeof(cs.reg));// Clear shift register
+            std::memcpy(&cs.reg[1],&cs.lambda[1],np); // Load lambda coeffs
+            cs.nr=0;                    // Clear number of roots found
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Begin search
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            for (int i=1,k=T::iprim-1;i<=T::N;++i,k=(k+T::iprim)%T::N)
+            {
+              uint8_t q=1;              // lambda(0) in poly domain contributes 1
+              for (int j=cs.ordl;j>0;--j)// For each lambda coeff (skip j=0 per reference)
+              {                         // Evaluate lambda at alpha^k
+                if (cs.reg[j]!=T::a0)   // Non-zero coeff?
+                {                       // Yes, update q
+                  cs.reg[j]=static_cast<uint8_t>((cs.reg[j]+j)%T::N);// Shift: reg[j] += j
+                  q^=T::ato[cs.reg[j]]; // Update q 
+                }                       // End if non-zero coeff
+                if (lg!=nullptr)
+                  lg->Deb("RS CS: i=%d j=%d reg=%02X q=%02X",i,j,cs.reg[j],q);
+              }                         // End for each lambda coeff
+              if (q!=0)                 // Did we find a root?
+                continue;               // No, continue search
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              // Found root; update locs
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              cs.root[cs.nr]=static_cast<uint8_t>(i); // Store root location
+              cs.loc[cs.nr]=static_cast<uint8_t>(k); // Store error location
+              if (lg!=nullptr)
+                lg->Deb("RS CS: Found root %d at position %d",cs.nr,cs.root[cs.nr]);
+              if (++cs.nr==cs.ordl)     // Found all roots?
+                break;                  // Yes, exit search 
+            }                           // End for each element in field
+            if (lg!=nullptr)
+              lg->Inf("RS CS: Completed Chien's Search algorithm, found %d roots",cs.nr);
+            if (cs.ordl!=cs.nr)         // Found all roots?
+              return -1;                // Return failure if not all roots found
+            return cs.nr;               // Return number of roots found
+          }                             // ~~~~~~~~~~ ChienSearch ~~~~~~~~~~ //
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // 4) Compute Omega polynomial
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          inline void ComputeOmega (
+            CodecState& cs) const
+          {                             // ~~~~~~~~~ ComputeOmega ~~~~~~~~~ //
+            cs.ordom=0;                 // Clear omega order
+            if (lg!=nullptr)
+              lg->Inf("RS CO: Begin Omega polynomial computation");
+            for (int i=0;i<np;++i)      // For each coeff up to # of parity symbols
+            {                           // Compute omega coeff i
+              uint8_t tmp{0};           // Temp accumulator
+              int up=(cs.ordl<i)?cs.ordl:i;// Upper limit
+              for (int j=up;j>=0;--j)   // Starting from the highest degree coeff
+              {                         // Compute term j
+                if ((cs.s[i-j]!=T::a0)&&(cs.lambda[j]!=T::a0))// Non-zero terms?
+                {                       // Yes, update temp
+                  tmp^=T::ato[(cs.s[i-j]+cs.lambda[j])%T::N];// Update temp
+                  if (lg!=nullptr)
+                    lg->Deb("RS CO: Omega update i=%d j=%d s=%02X lambda=%02X tmp=%02X",
+                      i,j,cs.s[i-j],cs.lambda[j],tmp);                    
+                }                       // End if non-zero terms
+              }                         // End for each term
+              if (tmp!=0)               // Non-zero omega coeff?
+                cs.ordom=i;             // Update omega order
+              cs.om[i]=T::idxof[tmp];   // Store omega coeff in index form
+              if (lg!=nullptr)
+                lg->Deb("RS CO: Omega[%d]=%02X",i,cs.om[i]);
+            }                           // End for each coeff
+            cs.om[np]=T::a0;            // Clear highest omega coeff
+            if (lg!=nullptr)
+              lg->Inf("RS CO: Completed Omega polynomial computation");
+          }                             // ~~~~~~~~~ ComputeOmega ~~~~~~~~~ //
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // 5) Forney's algorithm to compute error magnitudes and correct
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          inline void ForneyCorrection (
+            CodecState& cs,             // Codec state
+            uint8_t* block) const       // Codeword buffer
+          {                             // ~~~~~~~~ ForneyCorrection ~~~~~~~~ //
+            if (block==nullptr)         // Valid codeword buffer?
+              return;                   // No, return failure
+            if (lg!=nullptr)
+              lg->Inf("RS FC: Begin Forney's error correction");
+            for (int j=cs.nr-1;j>=0;--j)// For each root found
+            {                           // Compute error magnite
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              // num1 = omega(inv(X_l))
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              uint8_t num1{0};          // Numerator 1
+              for (int i=cs.ordom;i>=0;--i)// For each omega coeff
+              {                         // Compute term i
+                if (cs.om[i]!=T::a0)    // Non-zero coeff?
+                {                       // Yes, update num1
+                  num1^=T::ato[(cs.om[i]+(i*cs.root[j]))%T::N];// Update num1
+                  if (lg!=nullptr)
+                    lg->Deb("RS FC: num1 update j=%d i=%d om=%02X num1=%02X",j,i,cs.om[i],num1);
+                }                       // End if non-zero coeff   
+              }                         // End for each omega coeff
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              // num2=inv(X_l)^(FCR-1)
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              uint8_t num2=T::ato[((cs.root[j]*(T::nfr-1))+T::N)%T::N];// num2=inv(X_l)^(FCR-1)
+              if (lg!=nullptr)
+                lg->Deb("RS FC: num2 for root %d = %02X",j,num2);
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              // den = lamdba'(inv(X_l)) using even terms of lambda (formal derivative)
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              uint8_t den{0};           // Denominator
+              int st=(cs.ordl<(np-1))?cs.ordl:(np-1);// Start point
+              st&=~1;                   // Make even
+              for (int i=st;i>=0;i-=2)  // For each even lambda coeff
+              {                         // Compute denominator 
+                if (cs.lambda[i+1]!=T::a0)// Non-zero coeff?
+                {                       // Yes, update den
+                  den^=T::ato[(cs.lambda[i+1]+(i*cs.root[j]))%T::N];// Update den
+                  if (lg!=nullptr)
+                    lg->Deb("RS FC: den update j=%d i=%d lambda=%02X den=%02X",j,i,cs.lambda[i+1],den);
+                }                       // End if non-zero coeff
+              }                         // End for each even lambda coeff
+              if (den==0)               // Denominator zero?
+              {                         // Yes, that's a Forney failure.
+                cs.forfail=true;        // Set Forney failure flag
+                if (lg!=nullptr)
+                  lg->Err("RS FC: Forney correction failure at position %d (denominator zero)",cs.loc[j]);
+                return;                 // Return failure
+              }                         // End if denominator zero
+              if (num1!=0)              // Numerator equal zero?
+              {                         // No, compute error magnitude
+               block[cs.loc[j]] ^= T::ato[(T::idxof[num1]+T::idxof[num2]+T::N-T::idxof[den])%T::N];
+               if (lg!=nullptr)
+                 lg->Deb("RS FC: Corrected error at position %d, magnitude %02X",
+                   cs.loc[j],T::ato[(T::idxof[num1]+T::idxof[num2]+T::N-T::idxof[den])%T::N]);               
+              }                         // End if numerator non-zero
+            }                           // End for each root
+            if (lg!=nullptr)
+              lg->Inf("RS FC: Completed Forney's error correction");
+          }                             // ~~~~~~~~ ForneyCorrection ~~~~~~~~ //
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // 6) VerifyCorrections: recompute syndromes on corrected block,
+          // expect all zero
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          inline bool VerifyCorrections (
+            CodecState& cs,             // Codec state
+            const uint8_t* block) const // Codeword buffer
+          {                             // ~~~~~~~~ VerifyCorrections ~~~~~~~~ //
+            if (lg!=nullptr)
+              lg->Inf("RS VC: Begin verification of corrections");
+            (void)cs; // silence unused warning in some builds
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Recompute syndromes
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            int synerr{0};
+            // Rebuild poly-form syndromes across full codeword like ComputeSyndromes
+            uint8_t s2[np];             // New syndromes
+            for (int i=0;i<np;++i)      // For each syndrome
+              s2[i]=block[0];           // Initialize to first byte
+            for (int j=1;j<N;++j)       // Iterate over the whole codeword
+            {
+              for (int i=0;i<np;++i)
+              {
+                if (s2[i]==0)
+                  s2[i]=block[j];
+                else
+                  s2[i]=static_cast<uint8_t>(block[j]^T::ato[(T::idxof[s2[i]]+(T::nfr+i)*T::prim)%T::N]);
+              }
+            }
+            for (int i=0;i<np;++i)
+            {
+              synerr|=s2[i];
+              if (lg!=nullptr)
+                lg->Deb("RS VC: Recomputed syndrome[%d]=%02X",i,s2[i]);
+            }
+            return synerr==0;           // Return true if all syndromes zero
+          }                             // ~~~~~~~~ VerifyCorrections ~~~~~~~~ //
+        private:
+          std::unique_ptr<logx::Logger> lg{};
+    };
+  }
 
-    RS255223 (void)                     // Constructor
-    {
-      // Initialize logger first so it's available for any early logging
-      lg=logx::Logger::NewLogger();    // Create new logger instance
-      Assemble();                      // Assemble generator polynomial
-      sto=new RSStatus();              // Create status object
-      // Note: Logging writes to stdout and to /home/ljt/Projects/SDR/src/logs/log.txt
-    }                                  // End constructor
-    ~RS255223 (void)
-    {
-      if (sto!=nullptr)                // Did we create a status object?
-      {                                // Yes, delete it
-        delete sto;                    // Delete status object
-        sto=nullptr;                   // Remember we deleted it
-      }                                // Done deleting status object
-      if (lg)                          // If logger initialized
-      {
-        lg->Shutdown();                // Gracefully shutdown logger
-        lg.reset();                    // Release resource
-      }
-    }
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    // Assemble generator polynomial G(x)
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    inline void Assemble (void)
-    {                                 // ~~~~~~~~~ Assemble ~~~~~~~~~~ //
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // g(x) = Prod_{i=112..143} (x + alpha^i)
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      gen.assign(33,0);                // Generator polynomial coefficients [0..32]
-      gen[0]=1;                        // Start with constant 1
-      for (int i=0;i<32;++i)            // Current resulting degree == i
-      {                                // For each root
-        uint8_t a=gf.alog[ROOT_START+i]; // alpha^{112+i}
-        for (int j=32;j>=1;--j)         // Update degrees j down to 1
-          gen[j]=gf.Add(gen[j-1],gf.Multiply(a,gen[j]));
-        gen[0]=gf.Multiply(a,gen[0]);  // constant term
-      }                                // Done assembling generator polynomial
-      {
-        char buf[1024];
-        int off=0;
-        off+=std::snprintf(buf+off,sizeof(buf)-off,"RS Assemble: gen[0..32]=");
-        for (int i=0;i<=32;i++)
-          off+=std::snprintf(buf+off,sizeof(buf)-off,"%s%02X",(i==0?"":" "),gen[i]);
-        if (lg)
-          lg->Inf("%s",buf);
-      }
-    }                                  // ~~~~~~~~~ Assemble ~~~~~~~~~~ //
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    // Encode data bytes into RS(255,223) codeword
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    inline void Encode (
-      const uint8_t* const dat,        // data to encode
-      int32_t k,                       // Data offset
-      std::vector<uint8_t>* const o)   // Output code word
-    {                                  // ~~~~~~~~~~ Encode ~~~~~~~~~~ //
-      if (dat==nullptr||o==nullptr)    // Bad args?
-        return;                        // Yes, nothing to do. Return.
-      if (k<=0||k>K)                   // Invalid k?
-        k=K;                           // Clamp to max 223
-      uint8_t poly[N]={0};             // Parity bytes buffer
-      std::memcpy(poly+(N-k),dat,k);   // Copy data to high-degree coefficients
-      for (int i=N-k;i<N;++i)          // Process data bytes
-      {                                // Encode
-        uint8_t fb=poly[i];            // Compute feedback byte
-        if (fb!=0)                     // Non-zero feedback?
-        {
-          for (int j=1;j<=32;++j)      // Shift and update
-            poly[i-j]^=gf.Multiply(gen[32-j],fb);
-        }
-      }                               // Done encoding data bytes
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Output codeword: data bytes followed by parity bytes
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      o->resize(k+32,0);              // Resize output buffer
-      std::memcpy(o->data(),dat,k);   // Copy data bytes
-      std::memcpy(o->data()+k,poly,32);// Copy parity bytes
-      if (lg)
-        lg->Inf("RS Encode: k=%d n=%d",k,k+32);
-      {
-        char buf[512];
-        int off=0;
-        off+=std::snprintf(buf+off,sizeof(buf)-off," cw[0..7]=");
-        for (int i=0;i<8&&i<k+32;i++)
-          off+=std::snprintf(buf+off,sizeof(buf)-off," %02X",(*o)[i]);
-        if (lg)
-          lg->Inf("%s",buf);
-      }
-      {
-        char buf[512];
-        int off=0;
-        off+=std::snprintf(buf+off,sizeof(buf)-off," cw[%d..%d]=",k+24,k+31);
-        for (int i=k+24;i<k+32;i++)
-          off+=std::snprintf(buf+off,sizeof(buf)-off," %02X",(*o)[i]);
-        if (lg)
-          lg->Inf("%s",buf);
-      }
-    }                                 // ~~~~~~~~~~ Encode ~~~~~~~~~~ //
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    // Encode but using vector input
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    inline void EncodeVec (
-      const std::vector<uint8_t>* dat, // Input codeword
-      std::vector<uint8_t>* const o)    // Corrected symbols buffer
-    {                                  // ~~~~~~~~~~ EncodeVec ~~~~~~~~~~ //
-      if (dat==nullptr||o==nullptr)    // Bad args?
-        return;                        // Yes, nothing to do. Return.
-      Encode(dat->data(),static_cast<int32_t>(dat->size()),o); // Call raw pointer version
-    }                                  // ~~~~~~~~~~ EncodeVec ~~~~~~~~~~ //
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    // Decode RS(255,223) codeword into data bytes
-    // Output status indicates success or failure
-    // Output buffer expects at least 255 bytes to produce up to 223 
-    // corrected symbols.
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    inline RSStatus Decode (
-      const uint8_t* const code,       // Input code word
-      uint8_t*const o)                 // Decoded output
-    {                                  // ~~~~~~~~~~ Decode ~~~~~~~~~~ //
-      if (code==nullptr||o==nullptr)    // Bad args?
-      {                                // Yes, return failure
-        sto->corr=0;                   // No corrections
-        sto->ok=false;                 // No success
-        return *sto;                    // Return status
-      }                                // Good args, proceed with decode
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Sanity checks
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      if (lg)
-        lg->Inf("RS Decode: begin");   // Log decode start
-      {                                // Log codeword snippets
-        char buf[512];                 // Buffer for logging
-        int off=0;                     // Offset into buffer
-        off+=std::snprintf(buf+off,sizeof(buf)-off," code[0..7]=");
-        for (int i=0;i<8;i++)
-          off+=std::snprintf(buf+off,sizeof(buf)-off," %02X",code[i]);
-        if (lg)
-          lg->Inf("%s",buf);
-      }
-      {                                // Log codeword snippets
-        char buf[256];
-        std::snprintf(buf,sizeof(buf)," code[223..224]= %02X %02X",code[223],code[224]);
-        if (lg)
-          lg->Inf("%s",buf);
-      }
-      {
-        char buf[512];
-        int off=0;
-        off+=std::snprintf(buf+off,sizeof(buf)-off," code[247..254]=");
-        for (int i=247;i<255;i++)
-          off+=std::snprintf(buf+off,sizeof(buf)-off," %02X",code[i]);
-        if (lg)
-          lg->Inf("%s",buf);
-      }
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // 0) Build polynomial C(x): degrees 0..254 (low..high).
-      // Data:    cw[0..222] = data bytes (degrees 0..222)
-      // Parity:  cw[223..254] = parity bytes (degrees 223..254)
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      uint8_t cw[N];
-      std::memcpy(cw,code,N);          // Direct copy, no reversal
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Layout convention for Horner evaluation:
-      // We store coefficient for degree d at index idx = d, so that
-      // Horner acc = acc*a + cw[idx] computes sum coeff[d] * a^d.
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Begin decode process, compute syndromes:
-      // (1) Syndromes S_i = C(a^{i+112}), i=0..31
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      uint8_t S[2*T];
-      bool azer=true;
-      for (int i=0;i<2*T;++i)          // For each syndrome
-      {                                // Compute S[i]=C(alpha^{112+i})
-        S[i]=0;                        // Initialize for syndrome to 0
-        for (int j=0;j<N;++j)          // For each coefficient
-        {
-          if (cw[j]!=0)
-            S[i]^=gf.Multiply(cw[j],gf.Power(gf.alog[ROOT_START+i],j));
-        }
-        azer&=(S[i]==0);               // Determine if still all zero syndromes
-        if (lg)
-          lg->Deb(" RS Decode: S[%d]=%02X",i,S[i]);
-      }                                // Done computing all syndromes
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // (1a) Check for all-zero syndromes -> no errors
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      if (azer)                        // All syndromes zero?
-      {                                // Yes, no errors
-        sto->corr=0;                   // No corrections needed
-        sto->ok=true;                  // Decode successful
-        std::memcpy(o,cw,K);           // Copy data bytes to output
-        if (lg)
-          lg->Inf(" RS Decode: all syndromes zero, no errors detected");
-        return *sto;                    // Return status
-      }                                // Errors detected, proceed to decoding
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Sanity check
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      if (lg)
-        lg->Inf(" RS Decode: proceed to error correction");
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // (2) Berlekamp-Massey: LAMBDA(x)
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      uint8_t C[2*T+1]={1};            // Error locator polynomial
-      uint8_t B[2*T+1]={1};            // Previous C(x)
-      int L=0,m=1;                     // Current degree of C(x), correction factor
-      uint8_t b=1;                     // Last discrepancy
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Main Berlekamp-Massey loop
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      for (int n=0;n<2*T;++n)          // For each syndrome index
-      {                                // Compute discrepancy d
-        uint8_t d=S[n];
-        for (int i=1;i<=L;++i)
-          if (n>=i)
-            d^=gf.Multiply(C[i],S[n-i]);
-        if (d==0)                      // No discrepancy?
-        {                              // Yes
-          ++m;                         // Increment m
-          for (int i=2*T;i>0;--i)
-            B[i]=B[i-1];               // Shift B(x)
-          B[0]=0;
-          continue;                    // Skip this syndrome
-        }                              // Proceed with non-zero discrepancy
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // C(x) = C(x) - d/b * x^m * B(x)
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        uint8_t T[2*T+1];
-        std::memcpy(T,C,sizeof(C));     // Copy C(x) to T(x)
-        uint8_t coef=gf.Multiply(d,gf.Inverse(b));
-        for (int j=0;j<=2*T;++j)
-        {
-          if (m+j<=2*T)
-            C[m+j]^=gf.Multiply(coef,B[j]);
-        }
-        if (2*L<=n)                    // Time to update?
-        {                              // Yes
-          L=n+1-L;                     // Update degree L
-          std::memcpy(B,T,sizeof(B));  // Update B(x)
-          b=d;                         // Update b
-          m=1;                         // Reset m
-        }
-        else                           // No update to B(x), L, b
-        {
-          ++m;                         // Increment m
-          for (int i=2*T;i>0;--i)
-            B[i]=B[i-1];               // Shift B(x)
-          B[0]=0;
-        }
-      }                                // Done with all syndromes
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Sanity check
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      {
-        char buf[1024];
-        int off=0;
-        off+=std::snprintf(buf+off,sizeof(buf)-off," RS BM: L=%d C[0..%d]=",L,L);
-        for (int i=0;i<=L;i++)
-          off+=std::snprintf(buf+off,sizeof(buf)-off," %02X",C[i]);
-        if (lg)
-          lg->Inf("%s",buf);
-      }                                // Done sanity check
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Check L for validity
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      if (L==0||L>T)                   // Invalid number of errors?
-      {                                // Yes, uncorrectable
-        sto->corr=0;                   // No corrections
-        sto->ok=false;                 // We are not OK
-        if (lg)
-          lg->Inf(" RS BM: L=%d (uncorrectable)",L);
-        return *sto;                    // Return status
-      }                                // Proceed with L valid
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // (3) Chien: find roots of ?(a^i), i=0..254
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      int ne=0;                        // Number of roots found
-      int iroot[T],pos[T];             // Root indices, coefficient positions
-      for (int i=0;i<255&&ne<T;++i)    // For each possible root
-      {                                // Evaluate C(x)
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // Evaluate at x = alpha^i. If there's an error at coefficient
-        // j, LAMBDA(alpha^i) = 0 where j = (255-i) mod 255
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        uint8_t sum=C[0];
-        uint8_t x=gf.alog[i];
-        for (int j=1;j<=L;++j)
-          sum^=gf.Multiply(C[j],gf.Power(x,j));
-        if (sum==0)                    // Found a root?
-        {                              // Yes
-          iroot[ne]=i;                 // Save the root index
-          pos[ne]=(255-i)%255;         // Save the coefficient position
-          if (lg)
-            lg->Inf(" RS Chien: root i=%3d -> coeff_index(pos)=%3d (x=a^{%d})",i,pos[ne],i);
-          ++ne;                        // Increment number of roots found
-        }                              // Done processing this possible root
-        if ((i+1)%32==0||i==254)
-          if (lg)
-            lg->Deb(" RS Chien: searched up to i=%3d found ne=%d roots so far",i,ne);
-      }                                // Done searching for roots
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Check ne for validity
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      if (ne==0||ne>T||ne!=L)          // Uncorrectable?
-      {                                // Yes
-        sto->corr=0;                   // No corrections
-        sto->ok=false;                 // We are not OK
-        if (lg)
-          lg->Inf(" RS Chien: L=%d ne=%d (uncorrectable)",L,ne);
-        return *sto;                    // Return status
-      }                                // Proceed with ne valid
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // optional: enforce ne==L
-      // if (ne != L) { sto->corr = 0; sto->ok = false; return *sto; }
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // (4) OMEGA(x) = [ S(x) * ?(x) ] mod x^{32}
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      uint8_t om[2*T]={0};             // Omega polynomial
-      for (int i=0;i<2*T;++i)          // For each degree in Omega
-      {                                // Compute Omega[i]
-        om[i]=S[i];
-        for (int j=1;j<=L;++j)
-          if (i>=j)
-            om[i]^=gf.Multiply(C[j],S[i-j]);
-      }                                // Done computing all Omega[i]
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // (5) Forney corrections
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      for (int k=0;k<ne;++k)           // For each error found
-      {                                // Compute error magnitude and location
-        const int i=iroot[k];          // alpha^i was a root
-        const int j=pos[k];            // coefficient index in cw[]
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // O(X^{-1}) / LAMBDA'(X^{-1})
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        uint8_t Xinv=gf.alog[(255-i)%255]; // Xinv = alpha^{255-i}
-        uint8_t num=om[0];             // Omega evaluated at X^{-1}
-        for (int t=1;t<2*T;++t)
-          num^=gf.Multiply(om[t],gf.Power(Xinv,t));
-        uint8_t den=1;                 // Derivative of error locator polynomial
-        for (int m=0;m<ne;++m)
-          if (m!=k)
-            den=gf.Multiply(den,gf.Add(1,gf.Multiply(gf.alog[iroot[m]],Xinv)));
-        if (den==0)                    // Derivative is zero?
-        {                              // Yes, skip this error
-          if (lg)
-            lg->Inf(" RS Forney[%d]: i=%3d j=%3d Xinv=a^{%3d} (0x%02X) den=0 SKIP",k,i,j,(255-i)%255,Xinv);
-          continue;                    // Skip this error
-        }                              // Proceed with non-zero derivative
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // Error magnitude: em = OMEGA(X^{-1}) / LAMBDA'(X^{-1})
-        // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        uint8_t emag=gf.Multiply(num,gf.Inverse(den)); // Magnitude of the error
-        uint8_t bef=cw[j];             // Before codeword
-        cw[j]^=emag;                   // Correct codeword
-        if (lg)
-        {
-          lg->Inf(" RS Forney[%d]: i=%3d j=%3d Xinv=a^{%3d} (0x%02X) d=0x%02X omx=0x%02X emag=0x%02X cw_before=0x%02X cw_after=0x%02X",
-            k,i,j,(255-i)%255,Xinv,num,om[0],emag,bef,cw[j]);
-        }
-      }                                // Done processing all errors
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // (6) Verify: recompute syndromes
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      bool vld=true;                   // Assume valid
-      for (int i=0;i<2*T;++i)          // For each syndrome
-      {                                // Recompute S[i]=C(alpha^{112+i})
-        S[i]=0;
-        for (int j=0;j<N;++j)          // For each coefficient
-          if (cw[j]!=0)                // Non-zero cw?
-            S[i]^=gf.Multiply(cw[j],gf.Power(gf.alog[ROOT_START+i],j));
-        vld&=(S[i]==0);                // Valid if all syndromes are zero
-        if (lg)
-          lg->Deb(" RS Verify: S[%d]=%02X",i,S[i]);
-      }                                // Done recomputing all syndromes
-      sto->corr=vld?ne:0;              // Set corrections if valid
-      sto->ok=vld;                     // Set success status
-      if (vld)                         // Valid codeword?
-        std::memcpy(o,cw,K);           // Copy data bytes to output
-      if (lg)
-        lg->Inf(" RS Verify: %s ne=%d corr=%d ok=%s",vld?"valid":"invalid",ne,sto->corr,vld?"true":"false");
-      if (lg)
-        lg->Inf(" RS Decode: end");    // Log decode end
-      return *sto;                      // Return status
-    }                                  // ~~~~~~~~~~ Decode ~~~~~~~~~~ //
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    // Decode but using vector input
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    inline RSStatus DecodeVec (
-      const std::vector<uint8_t>* code,
-      std::vector<uint8_t>* const o)
-    {                                  // ~~~~~~~~~~ DecodeVec ~~~~~~~~~~ //
-      if (code==nullptr||o==nullptr||code->size()<33||code->size()>N) // Bad args?
-      {                                // Yes, return failure
-        sto->corr=0;                   // No corrections
-        sto->ok=false;                 // Decode failed
-        return *sto;                    // Return status
-      }                                // Good args, proceed with decode
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Ensure the output vector has space for 223 data bytes
-      // and obtain a raw pointer
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      if (code->size()==N)
-      {
-        o->resize(K);                  // Resize output buffer
-        return Decode(code->data(),o->data()); // Call raw pointer version
-      }
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Support shortened codewords if needed.
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      int k=static_cast<int>(code->size())-32; // Number of data bytes
-      if (k<=0||k>K)
-      {
-        sto->corr=0;                   // No corrections
-        sto->ok=false;                 // Decode failed
-        return *sto;                    // Return status
-      }
-      int nz=K-k;                      // Number of zero bytes to prefeed for shortening
-      std::vector<uint8_t> full(N,0);  // Full codeword buffer
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Build full codeword with prefed zeroes
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      std::memcpy(full.data()+nz,code->data(),k); // Copy shortened codeword into full buffer
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Place parity after data bytes... canonical tail at full[223..254]
-      // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      std::memcpy(full.data()+K,code->data()+k,32); // Copy parity bytes
-      if (lg)
-        lg->Inf("RS DecodeVec: reconstructed full-length from shortened n=%zu (k=%d,nz=%d)",code->size(),k,nz);
-      o->resize(K);                    // Resize output buffer
-      return Decode(full.data(),o->data()); // Call raw pointer version
-    }                                  // ~~~~~~~~~~ DecodeVec ~~~~~~~~~~ //
-  private:
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    // GF(256) arithmetic tables and functions
-    // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-    GF256 gf;                         // GF(256) arithmetic tables
-    RSStatus* sto{nullptr};            // Status object
-    std::vector<uint8_t> gen;         // Generator polynomial coefficients
-    // Logger for this component
-    std::unique_ptr<logx::Logger> lg{};
-  };
-}
 
 #endif // SDR_MDM_RS_API_GUARD
