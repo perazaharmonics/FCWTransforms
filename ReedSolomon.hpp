@@ -101,7 +101,7 @@ namespace sdr::mdm
         0x00
       };
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Conversion table from Talay to Dual Basis
+      // Conversion table from Taylor to Dual Basis
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
       inline static constexpr uint8_t tdb[256]=
       {
@@ -123,7 +123,7 @@ namespace sdr::mdm
         0x08,0x73,0xa7,0xdc,0x91,0xea,0x3e,0x45,0xf2,0x89,0x5d,0x26,0x6b,0x10,0xc4,0xbf
       };
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-      // Conversion from Talay to Conventional Basis
+      // Conversion from Taylor to Conventional Basis
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
       inline static constexpr uint8_t tcb[256]=
       {
