@@ -1,6 +1,6 @@
  /* 
 * *
-* * Filename: ConvolutionalEncoder.hpp
+* * Filename: Viterbi.hpp
 * *
 * * Description:
 * *   CCSDS-standard Rate 1/2 Convolutional Encoder, K=7, Polynomials 171(octal),133(octal).
@@ -263,7 +263,7 @@ namespace sdr::mdm
       std::vector<std::array<uint8_t,64>> prev{}; // Survivor paths
       std::vector<std::array<uint8_t,64>> bit{};  // Input bits
       // Log object
-  std::unique_ptr<logx::Logger> lg{}; // Logger instance
+      std::unique_ptr<logx::Logger> lg{}; // Logger instance
       // ~~~~~~~~~~~~~~~~~~~~~~~~~ //
       // Trellis structure for Viterbi Decoder
       // ~~~~~~~~~~~~~~~~~~~~~~~~~ //
