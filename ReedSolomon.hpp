@@ -18,6 +18,7 @@
  * * References:
  * *  https://github.com/crozone/ReedSolomonCCSDS/tree/master
  * *  "General purpose Reed-Solomon decoder for 8-bit symbols or less", Copyright 2003 Phil Karn, KA9Q
+ * *   Original MAN Page: https://docs.kernel.org/core-api/librs.html
  * *
  */
 #pragma once
