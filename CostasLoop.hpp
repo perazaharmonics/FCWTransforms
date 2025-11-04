@@ -9,6 +9,8 @@
 * *
 * * Author:
 * *   JEP, J. Enrique Peraza
+* * Organization:
+* *   Trivium Solutions LLC, 9175 Guilford Rd, Suite 220, Columbia, MD 21046
 * *
  */
 #pragma once
@@ -54,11 +56,16 @@ namespace sdr
         {                               // ~~~~~~~~~~ SetLoopGains ~~~~~~~~~~ //
           plf.Assemble(kp,ki);          // Set loop filter gains
         }                               // ~~~~~~~~~~ SetLoopGains ~~~~~~~~~~ //
+        inline void SetOQPSKMode(bool en)
+        {                               // ~~~~~~~~~~ SetOQPSKMode ~~~~~~~~~~ //
+          oqpsk=en;                     // Enable/disable OQPSK/SQPSK axis-aware detector
+          ord=2;                        // Force modulation order to QPSK/SQPSK
+        }                               // ~~~~~~~~~~ SetOQPSKMode ~~~~~~~~~~ //
         inline cplx DownConvert (
           cplx f)                       // The frequency to downconvert (mix) with
         {                               // ~~~~~~~~~~ DownConvert ~~~~~~~~~~ //
           cplx v=nco.Tick();            // Get current NCO phasor and advance
-          return f*v;                   // Downconvert input by NCO phasor
+          return f*std::conj(v);        // Downconvert input sample
         }                               // ~~~~~~~~~~ DownConvert ~~~~~~~~~~ //
         inline void Update (
           cplx y)                       // Input sample after downconversion
@@ -75,21 +82,69 @@ namespace sdr
           {                             //
             T i=y.real();               // Get the real (In-Phase) part
             T q=y.imag();               // Get the imaginary (In-Quadrature) part
-            T si=(i>=T(0))?T(1):T(-1);  // Decision device I
-            T sq=(q>=T(0))?T(1):T(-1);  // Decision device Q
-            err=i*sq-q*si;              // Phase error detector
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Axis-aware detector for OQPSK/SQPSK
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            if (oqpsk)                  // Axis-aware detection enabled?
+            {                           // Yes
+              if (std::abs(i)>=std::abs(q)) // I-axis dominant?
+              {                         // Yes
+                // ~~~~~~~~~~~~~~~~~~~~ //
+                // I-active (treat like BPSK on I)
+                // ~~~~~~~~~~~~~~~~~~~~ //
+                T s=(i>=T(0))?T(1):T(-1);// Decision device I
+                err=q*s;                // Phase error detector
+              }                         // Done with I-active   
+              else                      // Q-axis dominant?
+              {                         // Yes
+                // ~~~~~~~~~~~~~~~~~~~~ //
+                // Q-active (treat like BPSK on Q)
+                // ~~~~~~~~~~~~~~~~~~~~ //
+                T s=(q>=T(0))?T(1):T(-1);// Decision device Q
+                err=-i*s;               // Phase error detector
+              }                         // Done with Q-active
+            }                           // Done with axis-aware detection
+            else                        // Standard QPSK/SQPSK detection
+            {                           // Yes
+              T si=(i>=T(0))?T(1):T(-1);// Decision device I
+              T sq=(q>=T(0))?T(1):T(-1);// Decision device Q
+              err=i*sq-q*si;            // Standard QPSK Costas phase detector
+            }                           // Done with standard detection
           }                             // Done with QPSK/SQPSK
           T dw=plf.Step(err);           // PI loop filter step
           w0+=dw;                       // Update NCO frequency (rad/s)
           double f=static_cast<double>(w0/(2.0*M_PI));// Convert to Hz
           nco.SetFrequency(f);          // Update NCO frequency
         }                               // ~~~~~~~~~~ Update ~~~~~~~~~~ //
+        inline T GetNCOFrequency (void) const
+        {                               // ~~~~~~~~~~ GetNCOFrequency ~~~~~~~~~~ //
+          return static_cast<T>(nco.GetFrequency());// Return NCO frequency in Hz
+        }                               // ~~~~~~~~~~ GetNCOFrequency ~~~~~~~~~~ //
+        inline T GetNCOPhase (void) const
+        {                               // ~~~~~~~~~~ GetNCOPhase ~~~~~~~~~~ //
+          return nco.GetPhase();        // Return NCO phase in radians
+        }                               // ~~~~~~~~~~ GetNCOPhase ~~~~~~~~~~ //
+        inline T GetLoopFrequency (void) const
+        {                               // ~~~~~~~~~~ GetLoopFrequency ~~~~~~~~~~ //
+          return w0/(2.0*M_PI);        // Return loop frequency in Hz
+        }                               // ~~~~~~~~~~ GetLoopFrequency ~~~~~~~~~~ //
+        inline size_t GetModulationOrder (void) const
+        {                               // ~~~~~~~~~~ GetModulationOrder ~~~~~~~~~~ //
+          return static_cast<size_t>(ord);// Return modulation order
+        }                               // ~~~~~~~~~~ GetModulationOrder ~~~~~~~~~~ //
+        inline void Reset (void)
+        {                               // ~~~~~~~~~~ Reset ~~~~~~~~~~ //
+          w0=T(0);                      // Reset loop frequency to 0 rad/s
+          nco.Reset();                  // Reset NCO phase to 0
+          plf.Reset();                  // Reset loop filter
+        }                               // ~~~~~~~~~~ Reset ~~~~~~~~~~ //
       private:
         T fs{T(1)};                     // Sampling frequency
         T w0{T(0)};                     // NCO angular frequency (rad/s)
         PILoopFilter<T> plf;            // PI loop filter
         int32_t ord{2};                 // Mode: 1=BPSK, 2=QPSK/SQPSK
         ::sdr::sig::NCO<T> nco;         // NCO instance
+        bool oqpsk{false};              // Use OQPSK/SQPSK axis-aware phase detector
     };
   }
 }
