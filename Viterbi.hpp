@@ -1,6 +1,6 @@
  /* 
 * *
-* * Filename: Viterbi.hpp
+* * Filename: ConvolutionalEncoder.hpp
 * *
 * * Description:
 * *   CCSDS-standard Rate 1/2 Convolutional Encoder, K=7, Polynomials 171(octal),133(octal).
@@ -10,6 +10,8 @@
 * * Author:
 * *   JEP, J. Enrique Peraza
 * *
+* * Organization:
+* *   Trivium Solutions LLC, 9175 Guilford Rd, Suite 220, Columbia, MD 21046
 * *
 */
 #pragma once
@@ -30,7 +32,7 @@ namespace sdr::mdm
       ConvolutionalEncoder (void)
       {
         Reset();                    // Initialize shift register
-  lg = logx::Logger::NewLogger(); // Own a live logger instance
+        lg=logx::Logger::NewLogger(); // Own a live logger instance
       }
       ~ConvolutionalEncoder (void)=default;
       inline void Reset (void) { z=0; } // Reset shift register and config
@@ -131,7 +133,12 @@ namespace sdr::mdm
       ~ViterbiDecoder (void)
       {
         if (lg)
-          lg->ExitLog("ViterbiDecoder destructor called");
+        {
+          // Do not call ExitLog() from destructors; that shuts down the
+          // shared logger and forces other modules to print to stderr.
+          lg->Inf("ViterbiDecoder destructor called");
+          lg.reset();
+        }
       }
       inline void Assemble (const ConvConfig& conf)
       {                                 // ~~~~~~~~~~ Assemble ~~~~~~~~~~ //
@@ -141,7 +148,7 @@ namespace sdr::mdm
       inline void Reset (void)
       {                                 // ~~~~~~~~~~ Reset ~~~~~~~~~~ //
         for (int s=0;s<64;++s)
-          pm[s]=0;                      // Clear path metrics
+          pm[s]=INF;                    // Initialize path metrics to infinity
         pm[0]=0;                        // Start at state 0
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         // Puncturing phase aligns with encoder (0-> p1,p2; 1 -> p1; 2 -> p2)
@@ -249,11 +256,106 @@ namespace sdr::mdm
         if (lg)
           lg->Inf("[END] Viterbi DecodeBits: output input bits=%zu",o->size());
       }                                 // ~~~~~~~~~~ DecodeBits ~~~~~~~~~~ //
+      inline void DecodeBitsWeighted (
+       const std::vector<uint8_t>* ch,  // Input channel bits (hard 0/1)
+        std::vector<float>* w,          // Weights for input channel bits
+        std::vector<uint8_t>* const o)  // Output decoded input bits
+      {                                 // ~~~~~~~~~~ DecodeBitsWeighted ~~~~~~~~~~ //
+        if (ch==nullptr||w==nullptr||o==nullptr||ch->empty())
+          return;
+       if (ch->size()!=w->size())      // Size mismatch?
+          return;                      // Nothing to do, size must match.
+        o->clear();                    // Clear output buffer
+        if (lg)
+          lg->Inf("[BEGIN] Viterbi DecodeBitsWeighted: input channel bits=%zu",ch->size());
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+        // Prepare survivor path storage
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+        prev.reserve(prev.size()+ch->size()+64);// Reserve space
+        bit.reserve(bit.size()+ch->size()+64);  // Reserve space
+        size_t idx{0};                  // Index into channel bitsream
+        const size_t nbits=ch->size();  // Number of channel bits
+        while (true)                    // For.... almost ever.....
+        {
+          uint8_t r1{0},r2{0};          // Received parity bits
+          uint8_t hp1{0},hp2{0};        // Received flags
+          float w1{0.f},w2{0.f};        // Weights for received bits
+          if (!ccfg.p34)                // Rate 1/2?
+          {
+            if (idx+1>=nbits)           // Not enough bits left?
+              break;                    // Done processing
+            r1=(*ch)[idx]&1;            // Get parity bit 1
+            w1=std::clamp((*w)[idx],0.f,1.f);// Get weight for parity bit 1
+            idx++;                      // Advance index
+            r2=(*ch)[idx]&1;            // Get parity bit 2
+            w2=std::clamp((*w)[idx],0.f,1.f);// Get weight for parity bit 2
+            idx++;                      // Advance index
+            hp1=1;                      // Mark parity bit 1 received
+            hp2=1;                      // Mark parity bit 2 received
+            if (lg)
+              lg->Deb(" DecodeBitsWeighted: Rate 1/2, r1=%d w1=%.2f r2=%d w2=%.2f",r1,w1,r2,w2);
+          }                             // Done with 1/2
+          else
+          {
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Rate 3/4 puncturing phase: (0/1/2) bits per 3 input bits
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            if (ph==0)                  // Phase counter zero?
+            {
+              if (idx+1>=nbits)         // Not engough bits left?
+                break;                  // Done processing
+              r1=(*ch)[idx]&1;          // Get parity bit 1
+              w1=std::clamp((*w)[idx],0.f,1.f);// Get weight for parity bit 1
+              idx++;                    // Advance index
+              r2=(*ch)[idx]&1;          // Get parity bit 2
+              w2=std::clamp((*w)[idx],0.f,1.f);// Get weight for parity bit 2
+              idx++;                    // Advance index
+              hp1=1;                    // Mark parity bit 1 received
+              hp2=1;                    // Mark parity bit 2 received
+              if (lg)
+                lg->Deb(" DecodeBitsWeighted: Rate 3/4, ph=%d r1=%d w1=%.2f r2=%d w2=%.2f",ph,r1,w1,r2,w2);
+            }                           // Done with phase 0
+            else if (ph==1)             // Phase 1?
+            {                           // Yes
+              if (idx>=nbits)           // Not enough bits left?
+                break;                  // Done processing
+              r1=(*ch)[idx]&1;          // Get parity bit 1
+              w1=std::clamp((*w)[idx],0.f,1.f);// Get weight for parity bit 1
+              idx++;                    // Advance index
+              hp1=1;                    // Mark parity bit 1 received
+              hp2=0;                    // Parity bit 2 not received
+              if (lg)
+                lg->Deb(" DecodeBitsWeighted: Rate 3/4, ph=%d r1=%d w1=%.2f",ph,r1,w1);
+            }                           // Done with phase 1
+            else                        // Else phase 2
+            {                           //
+              if (idx>=nbits)           // Not enough bits left?
+                break;                  // Done processing
+              r2=(*ch)[idx]&1;          // Get parity bit 2
+              w2=std::clamp((*w)[idx],0.f,1.f);// Get weight for parity bit 2
+              idx++;                    // Advance index
+              hp1=0;                    // Parity bit 1 not received
+              hp2=1;                    // Mark parity bit 2 received
+              if (lg)
+                lg->Deb(" DecodeBitsWeighted: Rate 3/4, ph=%d r2=%d w2=%.2f",ph,r2,w2);
+            }                           // Done with phase 2
+          }                             // Done with 3/4 punctured code
+          ViterbiStepWeighted(r1,r2,hp1,hp2,w1,w2);// Perform one Viterbi time step
+          if (ccfg.p34)                 // Rate 3/4?
+            ph=(ph+1)%3;                // Advance puncturing phase
+        }                               // Done processing channel bits
+        std::vector<uint8_t> urev{};    // Reversed input bits
+        Traceback(&urev);               // Perform traceback
+        o->assign(urev.rbegin(),urev.rend());// Assign in forward order
+        if (lg)
+          lg->Inf("[END] Viterbi DecodeBitsWeighted: output input bits=%zu",o->size());
+      }
     private:
       ConvConfig ccfg{};                // Convolutional Codec conf parameters
       int ph{0};                        // Puncturing phase counter
       static constexpr uint16_t INF=0x3FFF;// big and safe for short frames
-      uint8_t pm[64]{};                 // Path metrics
+      static constexpr uint16_t BM_SCALE=256; // Branch metric scaling factor
+      uint16_t pm[64]{};                 // Path metrics
       size_t steps{0};                  // Number of steps Viterbi has gone through
       // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
       // Survivor paths: one row per step, 64 colums (state)
@@ -473,6 +575,69 @@ namespace sdr::mdm
         if (lg)
           lg->Deb(" [END] ViterbiStep: Completed step %zu",steps);
       }                                 // ~~~~~~~~~~ ViterbiStep ~~~~~~~~~~ //
+      inline void ViterbiStepWeighted (
+        uint8_t r1,                     // Received parity bit 1
+        uint8_t r2,                     // Received parity bit 2
+        uint8_t isp1,                   // Do we have parity bit 1?
+        uint8_t isp2,                   // Do we have parity bit 2?
+        float w1,                       // Weight for parity bit 1
+        float w2)                       // Weight for parity bit 2
+      {                                 // ~~~~~~~~~~ ViterbiStepWeighted ~~~~~~~~~~ //
+        if (lg)
+          lg->Deb(" [BEGIN] ViterbiStepWeighted: r1=%d r2=%d isp1=%d isp2=%d w1=%.2f w2=%.2f",
+            r1,r2,isp1,isp2,w1,w2);
+        uint16_t qm[64];                // New path metrics
+        std::fill(std::begin(qm),std::end(qm),INF);// Init to Inf
+        uint8_t ps[64]{};               // Predecessor state (prev row)
+        uint8_t ib[64]{};               // Input bit that led to this survivor state.
+        const uint16_t w1s=static_cast<uint16_t>(std::clamp(w1,0.f,1.f)*BM_SCALE+0.5f);// Scaled weight 1
+        const uint16_t w2s=static_cast<uint16_t>(std::clamp(w2,0.f,1.f)*BM_SCALE+0.5f);// Scaled weight
+        for (int s=0;s<64;++s)          // For each state...
+        {
+          const uint16_t base=pm[s];    // Base path metric for this state
+          if (base>=INF)                // Invalid path?
+            continue;                   // Skip it
+          for (int b=0;b<2;++b)         // For each input bit
+          {
+            const int ns=static_cast<int>(trellis.GetNext(s,b)[0]);// Next state
+            const uint8_t* e1=trellis.GetOut(s,b,0);// Output bits for this input
+            const uint8_t* e2=trellis.GetOut(s,b,1);// Output bits for this input
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            // Compute weighted branch metric from received bits to expected output bits
+            // ~~~~~~~~~~~~~~~~~~~~~~~~ //
+            uint16_t bm{0};             // Branch metric
+            if (isp1!=0)                // Parity bit present?
+            bm+=((*e1!=r1)?w1s:0);      // Add weighted branch metric
+            if (isp2!=0)                // Parity bit present?
+              bm+=((*e2!=r2)?w2s:0);    // Add weighted branch metric
+            const uint16_t npm=static_cast<uint16_t>(std::min<uint32_t>(INF,base+bm));// New path metric
+            if (npm<qm[ns])             // Better path?
+            {                           // Yes, so update optimal path
+              qm[ns]=npm;               // Update path metric
+              ps[ns]=static_cast<uint8_t>(s);// Store predecessor state
+              ib[ns]=static_cast<uint8_t>(b);// Store input bit that led to this state
+              if (lg)
+                lg->Deb(" ViterbiStepWeighted: Update State %02X New PM=%d Prev State %02X Input Bit %d",
+                  ns,npm,s,b);
+            }                           // Done updating optimal path
+          }                             // Done for each input bit
+        }                               // Done for each state
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+        // Commit new metrics and push survivors for traceback
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+        for (int s=0;s<64;++s)          // For each state
+          pm[s]=qm[s];                  // Commit new path metric
+        prev.emplace_back();            // Add new row for predecessor states
+        bit.emplace_back();             // Add new row for input bits
+        for (int s=0;s<64;++s)          // For each state
+        {                               // Store last step survivors and input bits
+          prev.back()[s]=ps[s];         // Predecessor state
+          bit.back()[s]=ib[s];          // Input bit that led to this state
+        }                               // Done for each state
+        ++steps;                        // Advance number of steps
+        if (lg)
+          lg->Deb(" [END] ViterbiStepWeighted: Completed step %zu",steps);
+      }                                 // ~~~~~~~~~~ ViterbiStepWeighted ~~~~~~~~~~ //
       inline void Traceback (
         std::vector<uint8_t>* const urev) // Reversed output bits
       {                                 // ~~~~~~~~~~ Traceback ~~~~~~~~~~~~ //
