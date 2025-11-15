@@ -2079,7 +2079,7 @@ inline vector<complex<T>>  IFFT (const vector<complex<T>> &s)
   // ---------------------------------- //
   transform(sConj.begin(), sConj.end(), sConj.begin(), 
     [siz](complex<T> x){return x/static_cast<T>(siz);}); // Normalize the signal.
-  return FFTStride(sConj);              // Return the FFT of the conjugate.
+  return FFT(sConj);                    // Return the FFT of the conjugate.
 }
 
 // ---------- BluesteinFFT: Arbitrary-N FFT via Chirp-Z & convolution (O(N log M)) ---------- //
