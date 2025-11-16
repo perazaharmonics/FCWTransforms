@@ -1771,7 +1771,7 @@ inline void  BitReversal(vector<std::complex<T>> &s, const int nBits) const
         swap(s[i], s[static_cast<size_t>(revNdx[i])]); // Swap the elements.             
 }                                       // End of the function.
     // ------------------------------------------------------------------------
-    // LevinsonDurbin: Given autoregression r[0..p], solves for AR coefficients
+    // LevinsonDurbin: Given autocorrelation r[0..p], solves for AR coefficients
     //   r[0] a[0]+r[1] a[1]+?+r[p] a[p]=0,    (Toeplitz system)
     //   returns (a[1..p], s²) where s² is the final prediction error.
     //   ?order?=p.  We assume r.size() >= p+1.
@@ -1780,7 +1780,7 @@ inline void  BitReversal(vector<std::complex<T>> &s, const int nBits) const
     inline std::pair<std::vector<T>, T>
     LevinsonDurbin(const std::vector<T>& r, int order) const
     {
-        // r: autoregression, r[0] ? r[order]
+        // r: autocorrelation, r[0] ? r[order]
         // order: AR order (p)
         if ((int)r.size() < order+1) {
             throw std::invalid_argument{"LevinsonDurbin: need r.size() >= order+1"};
@@ -2079,7 +2079,7 @@ inline vector<complex<T>>  IFFT (const vector<complex<T>> &s)
   // ---------------------------------- //
   transform(sConj.begin(), sConj.end(), sConj.begin(), 
     [siz](complex<T> x){return x/static_cast<T>(siz);}); // Normalize the signal.
-  return FFT(sConj);                    // Return the FFT of the conjugate.
+  return FFTStride(sConj);                    // Return the FFT of the conjugate.
 }
 
 // ---------- BluesteinFFT: Arbitrary-N FFT via Chirp-Z & convolution (O(N log M)) ---------- //
