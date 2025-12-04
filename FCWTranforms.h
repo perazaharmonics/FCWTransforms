@@ -944,9 +944,38 @@ inline std::function<std::pair<std::vector<double>, std::vector<double>>(const s
     return [this](const std::vector<double>& a, const std::vector<double>& d){ return this->inverse_haar(a,d); };
   }                            // -------- selectInverse --------
   // Convert enum to the string the denoiser expects.
+  // Expose enum string helpers for UI
+  public:
   inline std::string tTypeToString(void) const
   {
     return (this->tType==ThresholdType::Hard?"hard":"soft");
+  }
+  // String helpers for UI/debug
+  static inline std::string WaveletTypeToStr(WaveletType wt)
+  {
+    switch (wt)
+    {
+      case WaveletType::Haar:       return "Haar";
+      case WaveletType::Db1:        return "Db1";
+      case WaveletType::Db6:        return "Db6";
+      case WaveletType::Sym5:       return "Sym5";
+      case WaveletType::Sym8:       return "Sym8";
+      case WaveletType::Coif5:      return "Coif5";
+      case WaveletType::Morlet:     return "Morlet";
+      case WaveletType::MexicanHat: return "MexicanHat";
+      case WaveletType::Meyer:      return "Meyer";
+      case WaveletType::Gaussian:   return "Gaussian";
+      default:                      return "Unknown";
+    }
+  }
+  static inline std::string ThresholdTypeToStr(ThresholdType tt)
+  {
+    switch (tt)
+    {
+      case ThresholdType::Hard: return "Hard";
+      case ThresholdType::Soft: return "Soft";
+      default:                  return "Unknown";
+    }
   }
 protected:
 /// Pad a signal up to the next power of two
@@ -1826,15 +1855,26 @@ inline void  BitReversal(vector<std::complex<T>> &s, const int nBits) const
         return { arCoeffs, e[order] };
     }
 
-    // ------------------------------------------------------------------------
-    // AR_PSD: Given autocorrelation r[0..p], compute the ?all-pole? PSD estimate
-    //    at fftsize uniformly spaced frequencies [0, 2p).  We solve AR(p) via
-    //    Levinson-Durbin, then evaluate
-    //      H(w)=s² / |1+a[1] e^{-jw}+?+a[p] e^{-j p w} |²
-    //    at Nfft points, returning a vector<complex<T>> of length Nfft
-    //    (you can take real(H) or abs(H)² as your PSD). 
-    // ------------------------------------------------------------------------
-    
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+  // Levinson-Durbin's Auto-Regression Power Spectral Density. Works by using statistical
+  // methods and filters. It does, in order:
+  // 1. Autocorrelation: Computes the autocorrelation sequence of the signal.
+  // 2. Uses the AC sequence to find the coefficients of the Auto-regressive model,
+  //    which represents the signal as a lin combination of its historical values plues white noise term.
+  // 3. Levinson-Durbin Recursion: Solves the linear equation to find the AC sequence
+  //    in O(p^2) instead of O(p^3) for a p-th order model. It also produces refelction coefficients,
+  //    useful for lattice filters.
+  // 4. Finally, once the AR model coefficients are found, the PSD is calculated directly by the mode,
+  //    by taking the FFT of the AC function. 
+  // Why ARPSD? What's wrong with Welch's PSD method?
+  //  - ARPSD can provide higher resolution spectral estimates for short data records.
+  //  - It can model sharp spectral features better than non-parametric methods like Welch's.
+  //  - It is computationally efficient for high-order models.
+  // Caveats:
+  //  - Model Order Selection: Choosing the right order is crucial. Too low misses features,
+  //    too high overfits noise.
+  // - Assumes Stationarity: Works best for stationary signals.
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
     inline std::vector<std::complex<T>>
     AR_PSD(const std::vector<T>& r, int order, int fftsize) const
     {
@@ -2004,7 +2044,8 @@ inline vector<complex<T>> IFFTStride (const vector<complex<T>>& X) const
 }
 inline vector<T> IFFTStrideReal (const vector<complex<T>>& X) const
 {
-  if (X.emtpy())
+  // Guard: empty input
+  if (X.empty())
     return {};
   vector<complex<T>> y=IFFTStride(X);
   vector<T> yr(y.size());
@@ -2013,44 +2054,37 @@ inline vector<T> IFFTStrideReal (const vector<complex<T>>& X) const
   return yr;
 }
 // Auto-select FFT policy: chooses an algorithm path based on size classification.
-// 1) Power-of-two -> StockhamAutosortFFT (cache-friendly, no bit reversal)
-// 2) Prime        -> RaderFFT (prime-length via convolution)
-// 3) Co-prime factorization N=n1*n2 with gcd(n1,n2)==1 -> GoodThomasFFT (zero twiddles mid-stage)
-// 4) Fallback     -> BluesteinFFT (arbitrary-N via chirp Z+convolution)
+// 1) Power-of-two -> Cooley-Tukey Stride FFT
+// 2) Arbitrary size -> Bluestein Chirp-Z FFT
 inline vector<complex<T>> FFTAutoSelect (const vector<complex<T>>& x) const
 {
   const int N=static_cast<int>(x.size());
   if(N==0)
     return {};
   if(IsPowerOfTwo(static_cast<size_t>(N)))
-    return StockhamAutosortFFT(x);
-  // 
-  // Local prime test (avoid relying on lambda inside other routine scope)
-  auto isPrime=[&](int n){ if(n<2) return false; for(int d=2; d*d<=n; ++d) if(n%d==0) return false; return true; }; 
-  if(isPrime(N)) return RaderFFT(x);
-  if(auto pair=FindCoprimeFactorization(N)) return GoodThomasFFT(x,pair->first,pair->second);
-  return BluesteinFFT(x);
+    return FFTStride(x);
+  else
+    return BluesteinFFT(x);
 }
 // Inverse policy mirrors forward selection using corresponding IFFT variants.
 inline vector<complex<T>> IFFTAutoSelect (const vector<complex<T>>& X) const
 {
   const int N=static_cast<int>(X.size());
-  if(N==0) return {};
-  if(IsPowerOfTwo(static_cast<size_t>(N))) return StockhamAutosortIFFT(X);
-  auto isPrime=[&](int n){ if(n<2) return false; for(int d=2; d*d<=n; ++d) if(n%d==0) return false; return true; }; 
-  if(isPrime(N)) return RaderIFFT(X);
-  if(auto pair=FindCoprimeFactorization(N)) return GoodThomasIFFT(X,pair->first,pair->second);
-  return BluesteinIFFT(X);
+  if(N==0)
+    return {};
+  if(IsPowerOfTwo(static_cast<size_t>(N)))
+    return IFFT(X);
+  else
+    return BluesteinIFFT(X);
 }
 // Tiny human-readable reason string for logs/tests.
 inline std::string FFTAutoExplain (size_t N) const
 {
   if(N==0) return "empty";
-  if(IsPowerOfTwo(N)) return "stockham-pow2";
-  auto isPrime=[&](size_t n){ if(n<2) return false; for(size_t d=2; d*d<=n; ++d) if(n%d==0) return false; return true; }; 
-  if(isPrime(N)) return "rader-prime";
-  if(FindCoprimeFactorization(static_cast<int>(N))) return "good-thomas-coprime";
-  return "bluestein-general";
+  if(IsPowerOfTwo(N))
+    return "Cooley-Tukey-Stride-Permutation";
+  else
+    return "Bluestein-Chirp-Z";
 }
 // The IFFT can be computed using the FFT with flipped order of the 
 // frequency bins. That is, the complex conjugate of the input signal.
@@ -2066,7 +2100,7 @@ inline std::string FFTAutoExplain (size_t N) const
 // Therefore we can get X[m], simply by reversing the order of X[k].
 // --------------------------------------------------------------
 
-inline vector<complex<T>>  IFFT (const vector<complex<T>> &s)
+inline vector<complex<T>>  IFFT (const vector<complex<T>> &s) const
 {
   vector<complex<T>> sConj(s);          // Reversed spectrum buffer.
   // ---------------------------------- //
