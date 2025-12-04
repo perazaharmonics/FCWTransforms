@@ -138,11 +138,49 @@ namespace sdr
           nco.Reset();                  // Reset NCO phase to 0
           plf.Reset();                  // Reset loop filter
         }                               // ~~~~~~~~~~ Reset ~~~~~~~~~~ //
+        inline void SetLoopBandwidth (
+          T Bn,                         // Loop noise bandwidth (Hz)
+          T zeta=T(0.7071))             // Damping factor (default=0.7071, [0..1])
+        {                               // ~~~~~~~~~~ SetLoopBandwidth ~~~~~~~~~~~ //
+          if (Bn<=T(0))                 // Bad loop bandwidth?
+            Bn=fs*T(1e-3);              // Default to 0.1% of sample rate
+          bn=Bn;                        // Set loop bandwidth
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // Compute time constant and angular frequency
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          const T ts=T(1)/fs;           // Sample period
+          const T wn=(T(4)*zeta*bn)/(zeta+T(1)/(T(4)*zeta));// Natural frequency
+          if (zeta<=T(0))               // Bad damping factor?
+            zeta=T(0.7071);             // Default to 0.7071
+          z=zeta;                       // Set damping factor
+          const T wnts=wn*ts;           // Normalized natural frequency
+          const T d=T(1)+T(2)*zeta*wnts+wnts*wnts;// Denominator
+          const T kp=(T(4)*zeta*wnts)/d;// Proportional gain (Kp)
+          const T ki=(T(4)*wnts*wnts)/d;// Integral gain (Ki)
+          plf.Assemble(kp,ki);          // Set loop filter gains
+        }                               // ~~~~~~~~~~ SetLoopBandwidth ~~~~~~~~~~~ //
+        inline void SetDampingFactor (T zeta)
+        {                               // ~~~~~~~~~~ SetDampingFactor ~~~~~~~~~~~ //
+          if (zeta<=T(0))               // Bad damping factor?
+            zeta=z;                     // Prevent bad damping factor
+          z=zeta;                       // Set new damping factor
+          SetLoopBandwidth(bn,z);       // Recompute loop gains with new damping factor
+        }                               // ~~~~~~~~~~ SetDampingFactor ~~~~~~~~~~~ //
+        inline T GetProportionalGain (void) const
+        {                               // ~~~~~~~~~~ GetProportionalGain ~~~~~~~~~~ //
+          return plf.kp;                // Return proportional gain
+        }                               // ~~~~~~~~~~ GetProportionalGain ~~~~~~~~~~ //
+        inline T GetIntegralGain (void) const
+        {                               // ~~~~~~~~~~ GetIntegralGain ~~~~~~~~~~ //
+          return plf.ki;                // Return integral gain
+        }                               // ~~~~~~~~~~ GetIntegralGain ~~~~~~~~~~ //
       private:
         T fs{T(1)};                     // Sampling frequency
         T w0{T(0)};                     // NCO angular frequency (rad/s)
+        T bn{T(0.01)};                  // Loop bandwidth (rad/s)
+        T z{T(0.7071)};                 // Damping factor
         PILoopFilter<T> plf;            // PI loop filter
-        int32_t ord{2};                 // Mode: 1=BPSK, 2=QPSK/SQPSK
+        int32_t ord{1};                 // Mode: 1=BPSK, 2=QPSK/SQPSK
         ::sdr::sig::NCO<T> nco;         // NCO instance
         bool oqpsk{false};              // Use OQPSK/SQPSK axis-aware phase detector
     };
