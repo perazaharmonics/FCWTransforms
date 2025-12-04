@@ -5,20 +5,20 @@
 * * Description:
 * *   Gardner Timing Error Detector and Loop Filter for symbol timing recovery.
 * *   - Operates on complex baseband samples (IQ).
-* *   - Uses Farrow FIR interpolator for fractional delay (FarrowFIR.hpp), with selectable order (up to 5).
+* *   - Uses Farrow FIR interpolator for fractional delay (FarrowFIR.hpp),with selectable order (up to 5).
 * *   - TED: e=Re{x(nT+T/2)-x(nT-T/2)}*conj{x(nT)}
 * *   - PI loop adjusts nominal symbol period (omega) and fractional phase (mu).
 * *
-* *   - Output: y(n) = x(nT + mu) * ej(omega * nT)
-* *   - omega: nominal symbol period in samples (e.g., 10.0 for 10 samples/symbol)
+* *   - Output: y(n)=x(nT + mu) * ej(omega * nT)
+* *   - omega: nominal symbol period in samples (e.g.,10.0 for 10 samples/symbol)
 * *   - mu: fractional timing offset (0 <= mu < 1)
 * *   - Kp: proportional gain of the loop filter
 * *   - Ki: integral gain of the loop filter
 * *
 * *  Author:
-* *   JEP, J. Enrique Peraza
+* *   JEP,J. Enrique Peraza
 * * Organization:
-* *   Trivium Solutions LLC, 9175 Guilford Rd, Suite 220, Columbia, MD 21046
+* *   Trivium Solutions LLC,9175 Guilford Rd,Suite 220,Columbia,MD 21046
 * *
  */
 #pragma once
@@ -83,7 +83,7 @@ namespace sdr::mdm
           idel=Order;                   // Integer base delay equals interpolation order
         }                               // ~~~~~~~~~~ Assemble ~~~~~~~~~~ //
         inline void SetLoopGains (
-          T kp,                         // Proportional gain
+          T kp,                        // Proportional gain
           T ki)                         // Integral gain
         {                               // ~~~~~~~~~~ SetLoopGains ~~~~~~~~~~ //
           pfl->Assemble(kp,ki);         // Set loop filter gains
@@ -122,41 +122,55 @@ namespace sdr::mdm
         }                               // ~~~~~~~~~~ Reset ~~~~~~~~~~ //
 
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
-        // Tick one input sample, possible emit a symbol at correct time step
+        // Tick one input sample,possible emit a symbol at correct time step
         // Return true when a decision sample is produced in y
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
         inline bool Tick (
-          cplx x,                       // Input sample
-          cplx* const y,                // Output sample (if available)
+          cplx x,                      // Input sample
+          cplx* const y,               // Output sample (if available)
           bool* const strobe)           // Strobe signal (if output is valid)
         {                               // ~~~~~~~~~~~ Tick ~~~~~~~~~~~~~~~ //
-           if (x==cplx(0,0)||y==nullptr||strobe==nullptr)// Bad input?
-             return false;              // Yes, return error
+           if (y==nullptr||strobe==nullptr)// Bad input?
+             return false;              // Yes,return error
             dl->Write(x);               // Write complex sample to delay line
-            ++nsamp;                   // Count samples written since reset
+            ++nsamp;                    // Count samples written since reset
+            if (nsamp<static_cast<size_t>(idel+2)) // Do we have enough history to Farrow FIR interpolate?
+            {                           // Not yet,return false.
+              *strobe=false;            // Not enough samples yet
+              return *strobe;           // Return false
+            }
             // ~~~~~~~~~~~~~~~~~~~~~~~~ //
             // Advance fractional timing (symbol phase)
             // ~~~~~~~~~~~~~~~~~~~~~~~~ //
-            if (w <= T(0)) w = sps;     // Safety
+            if (w <= T(0)) w=sps;     // Safety
             mu += T(1) / w;             // Advance by 1 sample relative to sps
             *strobe=false;              // Default no output sample
             if (mu>=static_cast<T>(1))  // Next symbol time?
-            {                           // Yes, interpolate adjacent samples from delay line snapshot
-              cplx xm,x0,xp;            // Samples at nT+T/2 (newer), nT (center), nT-T/2 (older)
-              size_t D = idel;
-              // Older half-symbol: xp at (D, mu=+0.5)
-              fir->SetMu(static_cast<T>(0.5));
-              fir->Process(*dl, D, &xp);
-              // Center: x0 at (D, mu=0.0)
-              fir->SetMu(static_cast<T>(0.0));
-              fir->Process(*dl, D, &x0);
-              // Newer half-symbol: xm at (D-1, mu=+0.5)
-              if (D>0) {
-                fir->SetMu(static_cast<T>(0.5));
-                fir->Process(*dl, D-1, &xm);
-              } else {
-                xm = x0;
-              }
+            {                           // Yes,interpolate adjacent samples from delay line snapshot
+              cplx xm,x0,xp;            // Samples at nT+T/2 (newer),nT (center),nT-T/2 (older)
+              size_t D=idel;          // Base integer delay for Farrow FIR
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              // Older half-symbol: xp at (D,mu=+0.5)
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              fir->SetMu(static_cast<T>(0.5)); // Set fractional delay to +0.5
+              fir->Process(*dl,D,&xp);   // Interpolate older half-symbol
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              // Center: x0 at (D,mu=0.0)
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              fir->SetMu(static_cast<T>(0.0)); // Set fractional delay to 0.0
+              fir->Process(*dl,D,&x0);
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              // Newer half-symbol: xm at (D-1,mu=+0.5)
+              // ~~~~~~~~~~~~~~~~~~~~~~ //
+              if (D>0)                  // Valid integer delay?
+              {                         // Yes
+                fir->SetMu(static_cast<T>(0.5)); // Set fractional delay to +0.5
+                fir->Process(*dl,D-1,&xm); // Interpolate newer half-symbol
+              }                         // Done with newer half-symbol 
+              else                      // Invalid integer delay?
+              {                         // Yes
+                xm=x0;                  // Just duplicate center sample
+              }                         //
               // ~~~~~~~~~~~~~~~~~~~~~~ //
               // Timing Error Detector (TED)
               // e=Re{[x(nT+T/2)-x(nT-T/2)]*conj{x(nT)}}
@@ -182,10 +196,61 @@ namespace sdr::mdm
             }                           // Done with symbol time
             return *strobe;             // Return true if strobe is asserted
         }                               // ~~~~~~~~~~~ Tick ~~~~~~~~~~~~~~~ //
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+        // Set loop gains from a normalized timing-loop bandwidth.
+        // BN sym: normalized loop noise bandwidth (fraction of symbol rate).
+        //   - e.g., BN=0.01 -> 1% of Rs
+        //   - BN=0.00f -> 0.05% of Rs (narrower, slower integration).
+        // zeta: damping factor (0.5 to 1.0 typical, 0.707 default).
+        //
+        // NOTE: 
+        //   Loop operates at one update per symbol (when mu wraps).
+        //   so we design in "symbols" domain with Ts=1.
+        //   Effective loop dynamics also scale with TED gain g,
+        //   by cranking g up, we make the loop effectively wider.
+        // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+        inline void SetLoopBandwidth (
+          T Bn,                         // Normalized loop noise bandwidth (fraction of symbol rate)
+          T zeta=T(0.7071))             // Damping factor (default=0.7071, [0..1])
+        {                               // ~~~~~~~~~~ SetLoopBandwidth ~~~~~~~~~~~ //
+          if (Bn<=T(0))                 // Bad loop bandwidth?
+            Bn=T(0.01);                 // Failsafe default to 1% of symbol rate
+          bn=Bn;                        // Set loop bandwidth
+          if (zeta<=T(0))               // Bad damping factor?
+            zeta=T(0.7071);             // Default to 0.7071
+          z=zeta;                       // Set damping factor
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          // Compute time constant and angular frequency
+          // ~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+          const T ts=T(1);              // Sample period in symbols domain
+          const T wn=(T(4)*zeta*Bn)/(zeta+T(1)/T(4)*zeta);// Natural frequency
+          const T wnts=wn*ts;           // Normalized natural frequency
+          const T d=T(1)+T(2)*zeta*wnts+wnts+wnts;// Denominator
+          const T kp=(T(4)*zeta*wnts)/d;// Proportional gain (Kp)
+          const T ki=(T(4)*wnts*wnts)/d;// Integral gain (Ki)
+          pfl->Assemble(kp,ki);         // Set loop filter gains
+        }                               // ~~~~~~~~~~ SetLoopBandwidth ~~~~~~~~~~~ //
+        inline void SetDampingFactor (T zeta)
+        {                               // ~~~~~~~~~~ SetDampingFactor ~~~~~~~~~~~ //
+          if (zeta<=T(0))               // Bad damping factor?
+            zeta=z;                     // Prevent bad damping factor
+          z=zeta;                       // Set new damping factor
+          SetLoopBandwidth(bn,z);       // Recompute loop gains with new damping factor
+        }                               // ~~~~~~~~~~ SetDampingFactor ~~~~~~~~~~~ //
+        inline T GetProportionalGain (void) const
+        {                               // ~~~~~~~~~~ GetProportionalGain ~~~~~~~~~~ //
+          return pfl->kp;               // Return proportional gain
+        }                               // ~~~~~~~~~~ GetProportionalGain ~~~~~~~~~~ //
+        inline T GetIntegralGain (void) const
+        {                               // ~~~~~~~~~~ GetIntegralGain ~~~~~~~~~~ //
+          return pfl->ki;               // Return integral gain
+        }                               // ~~~~~~~~~~ GetIntegralGain ~~~~~~~~~~ //
       private:
         T sps{T(2)};                    // Samples per symbol (nominal) (2 for Gardner TED)
         T mu{T(0)};                     // Fractional timing offset (0 <= mu < 1)
         T w{T(2)};                      // Running sample per symbol estimate
+        T bn{T(0.075)};                  // Noise bandwidth (fraction of symbol rate)
+        T z{T(0.7071)};                 // Damping factor
         T g{T(0.1)};                    // Gain factor for TED
         ::sdr::mdm::PILoopFilter<T>* pfl{};// Proportional-Integral Loop Filter
         // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
